@@ -236,7 +236,7 @@ select.inp option{background:var(--card2)}
     </div>
   </div>
   <div class="kg" id="dash-kpis"></div>
-  <div class="two" style="margin-bottom:16px">
+  <div id="dash-com-alerta" style="display:none;margin-bottom:12px"></div>
     <div class="card cp">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
         <div class="stl" style="margin-bottom:0">🏆 Top Produtos</div>
@@ -1506,11 +1506,19 @@ select.inp option{background:var(--card2)}
       <div class="fg">
         <div class="fgrp">
           <label class="fl">Comissão %</label>
-          <div style="display:flex;align-items:center;gap:6px">
-            <input class="inp" id="mpar-comissao" type="number" min="0" max="100" step="0.1" placeholder="Ex: 2.5" style="flex:1">
-            <span style="font-size:12px;color:var(--mt)">% sobre lucro</span>
-          </div>
+          <input class="inp" id="mpar-comissao" type="number" min="0" max="100" step="0.1" placeholder="Ex: 2.5">
         </div>
+        <div class="fgrp">
+          <label class="fl">Base da Comissão</label>
+          <select class="inp" id="mpar-base">
+            <option value="lucro">% sobre Lucro</option>
+            <option value="faturamento">% sobre Faturamento</option>
+            <option value="faturamento_desc">% sobre Fat. c/ Desconto</option>
+          </select>
+        </div>
+      </div>
+      <div class="fg">
+        <div class="fgrp"><label class="fl">Meta mínima (R$)</label><input class="inp" id="mpar-meta" type="number" min="0" step="0.01" placeholder="Ex: 100.00"></div>
         <div class="fgrp"><label class="fl">Cidade</label><input class="inp" id="mpar-cidade" placeholder="Opcional"></div>
       </div>
       <!-- Categorias de comissão -->
@@ -1661,6 +1669,12 @@ select.inp option{background:var(--card2)}
       </div>
       <div class="fgrp"><label class="fl">Observação</label><input class="inp" id="mdoc-obs" placeholder="Entrega, prazo..."></div>
       <div class="fgrp"><label class="fl">Vendedor</label><input class="inp" id="mdoc-vend"></div>
+      <div class="fgrp">
+        <label class="fl">🤝 Parceiro desta venda</label>
+        <select class="inp" id="mdoc-parceiro">
+          <option value="">— Nenhum —</option>
+        </select>
+      </div>
       <!-- Entrega -->
       <div class="fgrp ff" id="mdoc-entrega-wrap" style="display:none;grid-column:1/-1">
         <div style="background:var(--card2);border:1px solid var(--br);border-radius:9px;padding:12px;display:grid;grid-template-columns:1fr 1fr;gap:10px">
@@ -1824,10 +1838,10 @@ select.inp option{background:var(--card2)}
         <div class="fgrp"><label class="fl">UF</label><input class="inp" id="mc-uf" maxlength="2"></div>
         <div class="fgrp"><label class="fl">Limite de Crédito</label><input class="inp" id="mc-lim" type="number" min="0" step="0.01" value="0"></div>
         <div class="fgrp">
-          <label class="fl">🤝 Indicado por (Parceiro)</label>
-          <select class="inp" id="mc-indicador">
-            <option value="">— Sem indicador —</option>
-          </select>
+          <label class="fl">🤝 Indicado por (Parceiro(s))</label>
+          <div id="mc-indicadores-wrap" style="display:flex;flex-wrap:wrap;gap:6px;background:var(--card2);border:1px solid var(--br);border-radius:8px;padding:10px;min-height:40px">
+            <span style="font-size:12px;color:var(--mt)">Nenhum parceiro cadastrado</span>
+          </div>
         </div>
         <div class="fgrp ff"><label class="fl">🚚 Endereço de Entrega (padrão)</label><input class="inp" id="mc-end-entrega" placeholder="Endereço de entrega padrão do cliente"></div>
         <div class="fgrp ff"><label class="fl">Observações</label><textarea class="inp" id="mc-obs" rows="2"></textarea></div>
@@ -2073,6 +2087,14 @@ function loadDB(){
       if(!DB.despesas)DB.despesas=[];
       if(!DB.parceiros)DB.parceiros=[];
       if(!DB.campanhas)DB.campanhas=[];
+      // Migra indicadorId (string) → indicadores (array) nos clientes
+      DB.clientes=DB.clientes.map(function(c){
+        if(c.indicadorId&&!c.indicadores){
+          return{...c,indicadores:c.indicadorId?[c.indicadorId]:[],indicadorId:undefined};
+        }
+        if(!c.indicadores)c.indicadores=[];
+        return c;
+      });
       if(!DB.xmlMemoria)DB.xmlMemoria={}; // chave: "forCNPJ|cProd" → {pid, fator}
       if(!DB.config)DB.config={nome:'CONSTRUMAX',end:'',tel:'',cnpj:'',rodape:'Obrigado!',meta:30};
       // Garante campos novos do config que podem estar ausentes em versões antigas
@@ -2492,6 +2514,43 @@ function renderDash(){
   } else {
     ab.style.display='none';
   }
+  // Alerta de comissões pendentes
+  const comAlertEl = document.getElementById('dash-com-alerta');
+  if(comAlertEl){
+    const parsComPendente=(DB.parceiros||[]).filter(function(par){
+      const clientes=(DB.clientes||[]).filter(function(c){return(c.indicadores||[]).includes(par.id);});
+      const cliIds=new Set(clientes.map(c=>c.id));
+      const peds=DB.pedidos.filter(function(d){return d.tipo==='ped'&&isAtivo(d)&&(cliIds.has(d.cliId)||(d.parceiroId===par.id));});
+      const base=par.base||'lucro';
+      const luc=peds.reduce(function(s,d){return s+docLucroFil(d,'com');},0);
+      const fat=peds.reduce(function(s,d){return s+d.total;},0);
+      const baseVal=base==='lucro'?luc:fat;
+      const comBruta=Math.round(baseVal*(par.comissao||0)/100*100)/100;
+      const jaPago=(par.pagamentos||[]).reduce(function(s,p){return s+(p.valor||0);},0);
+      const pendente=Math.max(0,comBruta-jaPago);
+      if(pendente<=0)return false;
+      if((par.meta||0)>0&&comBruta<par.meta)return false;
+      par._pendente=pendente;
+      return true;
+    });
+    if(parsComPendente.length){
+      const totalPend=parsComPendente.reduce(function(s,p){return s+(p._pendente||0);},0);
+      comAlertEl.style.display='block';
+      comAlertEl.innerHTML=`<div style="background:#fef2f2;border:1px solid #fca5a5;border-radius:10px;padding:12px 16px;display:flex;align-items:center;justify-content:space-between;gap:12px">
+        <div>
+          <div style="font-weight:700;color:#dc2626;font-size:13px">💜 Comissões a Pagar</div>
+          <div style="font-size:12px;color:#7f1d1d;margin-top:2px">${parsComPendente.map(p=>p.nome+' — '+fmt(p._pendente||0)).join(' &nbsp;·&nbsp; ')}</div>
+        </div>
+        <div style="text-align:right;flex-shrink:0">
+          <div style="font-size:18px;font-weight:800;color:#dc2626">${fmt(totalPend)}</div>
+          <button class="btn" onclick="go('parceiros')" style="font-size:11px;padding:3px 10px;margin-top:4px;background:#dc262620;color:#dc2626;border:none">Ver Parceiros</button>
+        </div>
+      </div>`;
+    } else {
+      comAlertEl.style.display='none';
+    }
+  }
+
   // Alerta de boletos vencidos
   const hoje2=new Date();hoje2.setHours(0,0,0,0);
   const hojeStr=hoje2.toISOString().slice(0,10);
@@ -2656,10 +2715,10 @@ function renderClientes(){
     const total=peds.reduce((s,d)=>s+d.total,0);
     const aRec=peds.filter(d=>docSaldo(d)>0).reduce((s,d)=>s+docSaldo(d),0);
     const isAnon=c.id==='cli-anonimo';
-    const par=c.indicadorId?(DB.parceiros||[]).find(p=>p.id===c.indicadorId):null;
+    const pars=(c.indicadores||[]).map(id=>(DB.parceiros||[]).find(p=>p.id===id)).filter(Boolean);
     return`<tr style="${isAnon?'opacity:0.7;background:var(--card2)':''}">
       <td style="font-weight:600">${c.nome}${isAnon?` <span style="font-size:10px;background:#64748b20;color:#64748b;padding:1px 6px;border-radius:4px">padrão</span>`:''}
-        ${par?`<div style="font-size:10px;color:#a78bfa;margin-top:1px">🤝 ${par.nome}</div>`:''}</td>
+        ${pars.length?`<div style="font-size:10px;color:#a78bfa;margin-top:1px">🤝 ${pars.map(p=>p.nome).join(', ')}</div>`:''}</td>
       <td style="color:var(--mt);font-size:11.5px">${c.cpf||'--'}</td>
       <td>${c.tel||'--'}</td><td>${c.cidade||'--'}</td>
       <td style="font-weight:700;color:var(--gn)">${fmt(total)}</td>
@@ -2672,18 +2731,7 @@ function renderClientes(){
     </tr>`;
   }).join(''):`<tr><td colspan="7" class="es">Nenhum cliente</td></tr>`;
 }
-function populateParceiroSelect(){
-  const sel=document.getElementById('mc-indicador');
-  if(!sel)return;
-  const val=sel.value;
-  sel.innerHTML='<option value="">— Sem indicador —</option>';
-  (DB.parceiros||[]).sort(function(a,b){return a.nome.localeCompare(b.nome);}).forEach(function(p){
-    const o=document.createElement('option');
-    o.value=p.id;o.textContent=p.nome+' ('+p.tipo+')';
-    sel.appendChild(o);
-  });
-  if(val)sel.value=val;
-}
+
 function abrirCliente(id){
   ['id','nome','cpf','tel','email','end','cidade','uf','obs'].forEach(f=>document.getElementById('mc-'+f).value='');
   document.getElementById('mc-lim').value=0;
@@ -2691,10 +2739,7 @@ function abrirCliente(id){
   document.getElementById('mc-tit').textContent='Novo Cliente';
   document.querySelectorAll('#md-cli .tab').forEach((t,i)=>t.classList.toggle('active',i===0));
   document.querySelectorAll('#md-cli .tabp').forEach((t,i)=>t.classList.toggle('active',i===0));
-  // Povoa select de indicadores
-  populateParceiroSelect();
-  const selInd=document.getElementById('mc-indicador');
-  if(selInd)selInd.value='';
+  renderIndicadoresWrap([]);
   if(id){
     const c=DB.clientes.find(x=>x.id===id);if(!c)return;
     document.getElementById('mc-id').value=c.id;
@@ -2702,7 +2747,7 @@ function abrirCliente(id){
     ['nome','cpf','tel','email','end','cidade','uf','obs'].forEach(f=>document.getElementById('mc-'+f).value=c[f]||'');
     document.getElementById('mc-lim').value=c.lim||0;
     document.getElementById('mc-end-entrega').value=c.endEntrega||'';
-    if(selInd)selInd.value=c.indicadorId||'';
+    renderIndicadoresWrap(c.indicadores||[]);
   }
   openMD('cli');
 }
@@ -2733,7 +2778,9 @@ function renderFichaCliente(id){
       <div class="ficha-avatar" style="background:linear-gradient(135deg,#f97316,#ea580c);color:#fff">${c.nome.charAt(0).toUpperCase()}</div>
       <div><div style="font-weight:800;font-size:15px">${c.nome}</div>
       <div style="font-size:11.5px;color:var(--mt);margin-top:2px">${c.tel||''} ${c.email?'· '+c.email:''}</div>
-      <div style="font-size:11.5px;color:var(--mt)">${c.cidade||''} ${c.uf||''}</div></div>
+      <div style="font-size:11.5px;color:var(--mt)">${c.cidade||''} ${c.uf||''}</div>
+      ${(c.indicadores||[]).length?`<div style="font-size:11px;color:#a78bfa;margin-top:3px">🤝 ${(c.indicadores||[]).map(id=>(DB.parceiros||[]).find(p=>p.id===id)?.nome||'').filter(Boolean).join(', ')}</div>`:''}
+      </div>
     </div>
     ${recHtml}
     <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px">
@@ -2752,7 +2799,7 @@ function salvarCliente(){
     cidade:document.getElementById('mc-cidade').value,uf:document.getElementById('mc-uf').value,
     obs:document.getElementById('mc-obs').value,lim:parseFloat(document.getElementById('mc-lim').value)||0,
     endEntrega:document.getElementById('mc-end-entrega').value,
-    indicadorId:document.getElementById('mc-indicador').value||''};
+    indicadores:getIndicadoresSelecionados()};
   if(id){DB.clientes=DB.clientes.map(c=>c.id===id?{...c,...obj}:c);toast('✓ Cliente atualizado');}
   else{DB.clientes.push({...obj,id:uid(),dt:hj()});toast('✓ Cliente cadastrado');}
   saveDB();closeMD('cli');renderClientes();
@@ -2811,6 +2858,7 @@ function salvarRascunho(manual=false){
     descTipo:descTipoAtual,
     obs:document.getElementById('mdoc-obs')?.value||'',
     vend:document.getElementById('mdoc-vend')?.value||'',
+    parceiroId:document.getElementById('mdoc-parceiro')?.value||'',
     pagIni:document.getElementById('mdoc-pag-ini')?.value||'',
     prazo:document.getElementById('mdoc-prazo')?.value||'',
     paraEntrega:document.getElementById('mdoc-para-entrega')?.checked||false,
@@ -2848,6 +2896,9 @@ function restaurarRascunho(tipo){
     if(r.pag){document.getElementById('mdoc-pag').value=r.pag;onPagChange();}
     if(r.obs)document.getElementById('mdoc-obs').value=r.obs;
     if(r.vend)document.getElementById('mdoc-vend').value=r.vend;
+    if(r.parceiroId){
+      populateParceiroSelect('mdoc-parceiro', r.parceiroId);
+    }
     if(r.descTipo)setDescTipo(r.descTipo);
     if(r.desc)document.getElementById('mdoc-desc').value=r.desc;
     if(r.prazo&&document.getElementById('mdoc-prazo'))document.getElementById('mdoc-prazo').value=r.prazo;
@@ -2930,6 +2981,7 @@ function _abrirDocModal(tipo){
   document.getElementById('mdoc-subtit').textContent=num+' -- '+(isOrc?'Não baixa estoque, não precisa de pagamento':'Baixa estoque ao salvar');
   document.getElementById('mdoc-tipo').value=tipo;
   document.getElementById('mdoc-salvar-btn').textContent='✓ Salvar '+(isOrc?'Orçamento':'Pedido');
+  populateParceiroSelect('mdoc-parceiro','');
   // Reset campo de busca de cliente
   document.getElementById('mdoc-cli').value='';
   document.getElementById('mdoc-cli-src').value='';
@@ -3245,6 +3297,7 @@ function salvarDoc(){
     desc:descSalvo,descTipo:descTipoSalvo,
     obs:document.getElementById('mdoc-obs').value,
     vend:document.getElementById('mdoc-vend').value,
+    parceiroId:document.getElementById('mdoc-parceiro')?.value||'',
     itens:[...docItens],total,lucro,pagamentos:[],
   };
   // Salva prazo se definido
@@ -3340,6 +3393,7 @@ function verDoc(id,fromEntregas){
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">
       ${[['Tipo',d.tipo==='orc'?'Orçamento':'Pedido'],['Cliente',d.cliNome],['Data',d.dt],
          ['Pagamento',d.pag],['Status',SC[d.st]?.l||d.st],['Vendedor',d.vend||'--'],
+         ['Parceiro',d.parceiroId?(DB.parceiros||[]).find(p=>p.id===d.parceiroId)?.nome||'--':'--'],
          ['Observação',d.obs||'--'],['Desconto',d.desc>0?(d.descTipo==='%'?d.desc+'%':'R$ '+d.desc.toFixed(2)):'Nenhum']
         ].map(([l,v])=>`<div style="background:var(--card2);border-radius:7px;padding:8px 11px"><div class="fl">${l}</div><div style="font-weight:600;margin-top:2px;font-size:12.5px">${v}</div></div>`).join('')}
     </div>
@@ -4112,6 +4166,7 @@ function duplicarPedido(id){
     descTipo:'R$',
     obs:'Duplicado de '+orig.num+(orig.obs?' | '+orig.obs:''),
     vend:orig.vend||'',
+    parceiroId:orig.parceiroId||'',
     dt:dtHtml(),
     itens:(orig.itens||[]).map(function(it){
       return{pid:it.pid,nome:it.nome,qtd:it.qtd,punit:it.punit,custo:it.custo,un:it.un||'',repasse:it.repasse||false};
@@ -4555,6 +4610,7 @@ function confirmarMescla(){
   const dtISOMesclado=pedMaisAntigo.dtISO||dtHtml();
   const novo={id:uid(),num,tipo:'ped',cliId:peds[0].cliId,cliNome:cli.nome,dt:dtMesclado,dtISO:dtISOMesclado,
     pag:peds[peds.length-1].pag,desc:0,descTipo:'R$',obs:'MESCLADO de: '+peds.map(d=>d.num).join(', '),vend:'',
+    parceiroId:peds.find(d=>d.parceiroId)?.parceiroId||'',
     itens:allItens,total,lucro,pagamentos:allPagamentos,estoqueBaixado:true};
   // Herda dados de entrega: se algum dos pedidos originais tinha entrega, copia para o novo
   const pedComEntrega=peds.find(d=>d.entrega&&d.entrega.st!=='entregue');
@@ -5161,6 +5217,8 @@ function abrirParceiro(id){
     document.getElementById('mpar-tel').value=p.tel||'';
     document.getElementById('mpar-cpf').value=p.cpf||'';
     document.getElementById('mpar-comissao').value=p.comissao||0;
+    document.getElementById('mpar-base').value=p.base||'lucro';
+    document.getElementById('mpar-meta').value=p.meta||0;
     document.getElementById('mpar-cidade').value=p.cidade||'';
     document.getElementById('mpar-obs').value=p.obs||'';
     catsAtivas=p.cats||[];
@@ -5168,6 +5226,8 @@ function abrirParceiro(id){
     ['nome','tel','cpf','cidade','obs'].forEach(f=>document.getElementById('mpar-'+f).value='');
     document.getElementById('mpar-tipo').value='Pedreiro';
     document.getElementById('mpar-comissao').value=2;
+    document.getElementById('mpar-base').value='lucro';
+    document.getElementById('mpar-meta').value=0;
   }
   renderParCats(catsAtivas);
   document.querySelectorAll('.md').forEach(m=>m.style.display='none');
@@ -5184,6 +5244,8 @@ function salvarParceiro(){
     tel:document.getElementById('mpar-tel').value.trim(),
     cpf:document.getElementById('mpar-cpf').value.trim(),
     comissao:parseFloat(document.getElementById('mpar-comissao').value)||0,
+    base:document.getElementById('mpar-base').value||'lucro',
+    meta:parseFloat(document.getElementById('mpar-meta').value)||0,
     cidade:document.getElementById('mpar-cidade').value.trim(),
     obs:document.getElementById('mpar-obs').value.trim(),
     cats:cats}; // cats vazio = todas
@@ -5198,11 +5260,11 @@ function salvarParceiro(){
 }
 function delParceiro(id){
   const p=DB.parceiros.find(x=>x.id===id);
-  const temClientes=(DB.clientes||[]).filter(c=>c.indicadorId===id).length;
+  const temClientes=(DB.clientes||[]).filter(c=>(c.indicadores||[]).includes(id)).length;
   if(temClientes&&!confirm(`Este parceiro tem ${temClientes} cliente(s) indicado(s).\nAo remover, os clientes perderão o vínculo.\n\nDeseja continuar?`))return;
   DB.parceiros=DB.parceiros.filter(p=>p.id!==id);
   // Remove vínculo dos clientes
-  DB.clientes=DB.clientes.map(c=>c.indicadorId===id?{...c,indicadorId:''}:c);
+  DB.clientes=DB.clientes.map(c=>({...c,indicadores:(c.indicadores||[]).filter(i=>i!==id)}));
   saveDB();renderParceiros();toast('Parceiro removido','#ef4444');
 }
 function limparFiltroPar(){
@@ -5217,9 +5279,18 @@ function verClientesPar(parid){
   const par=DB.parceiros.find(p=>p.id===parid);if(!par)return;
   const ini=document.getElementById('par-rel-ini')?.value||'';
   const fim=document.getElementById('par-rel-fim')?.value||'';
-  const clientes=(DB.clientes||[]).filter(c=>c.indicadorId===parid);
+  // Clientes via indicadores array OU pedidos com parceiroId direto
+  const clientes=(DB.clientes||[]).filter(c=>(c.indicadores||[]).includes(parid));
+  const pedsDiretos=DB.pedidos.filter(function(d){
+    if(d.tipo!=='ped'||!isAtivo(d)||d.parceiroId!==parid)return false;
+    if(clientes.find(c=>c.id===d.cliId))return false; // evita duplicar
+    return true;
+  });
+  const clisDiretos=[...new Set(pedsDiretos.map(d=>d.cliId))].map(id=>DB.clientes.find(c=>c.id===id)).filter(Boolean);
+  const todos=[...clientes,...clisDiretos];
   const tbody=document.getElementById('par-clientes-tbody');
-  const rows=clientes.map(function(c){
+  const base=par.base||'lucro';
+  const rows=todos.map(function(c){
     const peds=DB.pedidos.filter(function(d){
       if(d.tipo!=='ped'||!isAtivo(d)||d.cliId!==c.id)return false;
       if(ini&&(d.dtISO||'')<ini)return false;
@@ -5228,9 +5299,11 @@ function verClientesPar(parid){
     });
     const fat=peds.reduce((s,d)=>s+d.total,0);
     const luc=peds.reduce((s,d)=>s+docLucroFil(d,'com'),0);
-    const com=Math.round(luc*(par.comissao||0)/100*100)/100;
+    const baseVal=base==='lucro'?luc:fat;
+    const com=Math.round(baseVal*(par.comissao||0)/100*100)/100;
+    const direto=clisDiretos.find(x=>x.id===c.id)?'<span style="font-size:10px;color:#3b82f6;margin-left:4px">(direto)</span>':'';
     return`<tr>
-      <td style="font-weight:600">${c.nome}</td>
+      <td style="font-weight:600">${c.nome}${direto}</td>
       <td style="color:var(--mt);font-size:12px">${c.tel||'--'}</td>
       <td style="text-align:center">${peds.length}</td>
       <td style="font-weight:700;color:var(--or)">${fmt(fat)}</td>
@@ -5251,17 +5324,18 @@ function abrirPagComissao(parid, comValor){
   document.getElementById('mcp-valor').value=parseFloat(comValor)||0;
   document.getElementById('mcp-forma').value='Pix';
   document.getElementById('mcp-obs').value='';
-  // Total já pago
   const jaPago=(par.pagamentos||[]).reduce(function(s,p){return s+p.valor;},0);
+  const baseLabel=(par.base||'lucro')==='lucro'?'lucro':(par.base==='faturamento'?'faturamento':'fat.c/desc');
   document.getElementById('mcp-info').innerHTML=
     '<div style="font-weight:700;font-size:13px">'+par.nome+'</div>'
-    +'<div style="font-size:11px;color:var(--mt)">'+par.tipo+' · '+par.comissao+'% sobre lucro</div>'
+    +'<div style="font-size:11px;color:var(--mt)">'+par.tipo+' · '+par.comissao+'% sobre '+baseLabel+'</div>'
     +((par.cats&&par.cats.length)?'<div style="margin-top:4px;display:flex;flex-wrap:wrap;gap:3px">'
       +par.cats.map(function(c){return'<span style="background:#a78bfa20;color:#a78bfa;padding:1px 7px;border-radius:4px;font-size:10px;font-weight:700">'+c+'</span>';}).join('')
       +'</div>':'<div style="font-size:10px;color:var(--mt);margin-top:2px">Todas as categorias</div>')
+    +(par.meta?'<div style="font-size:10px;color:var(--mt);margin-top:4px">Meta mínima: '+fmt(par.meta)+'</div>':'')
     +'<div style="margin-top:8px;display:flex;gap:12px">'
-    +'<div><div style="font-size:10px;color:var(--mt)">Comissão calculada</div><div style="font-weight:700;color:#a78bfa">'+fmt(parseFloat(comValor)||0)+'</div></div>'
-    +(jaPago>0?'<div><div style="font-size:10px;color:var(--mt)">Já pago anteriormente</div><div style="font-weight:700;color:#10b981">'+fmt(jaPago)+'</div></div>':'')
+    +'<div><div style="font-size:10px;color:var(--mt)">Comissão pendente</div><div style="font-weight:700;color:#ef4444">'+fmt(parseFloat(comValor)||0)+'</div></div>'
+    +(jaPago>0?'<div><div style="font-size:10px;color:var(--mt)">Já pago</div><div style="font-weight:700;color:#10b981">'+fmt(jaPago)+'</div></div>':'')
     +'</div>';
   document.querySelectorAll('.md').forEach(function(m){m.style.display='none';});
   document.getElementById('md-com-pag').style.display='block';
@@ -5317,62 +5391,84 @@ function renderParceiros(){
 
   // Calcula métricas por parceiro
   const metricas=lista.map(function(par){
-    const clientes=(DB.clientes||[]).filter(c=>c.indicadorId===par.id);
+    // Clientes indicados por este parceiro (array indicadores)
+    const clientes=(DB.clientes||[]).filter(function(c){
+      return (c.indicadores||[]).includes(par.id);
+    });
     const cliIds=new Set(clientes.map(c=>c.id));
+    // Pedidos: via cliente OU parceiroId direto no pedido
     const peds=DB.pedidos.filter(function(d){
-      if(d.tipo!=='ped'||!isAtivo(d)||!cliIds.has(d.cliId))return false;
+      if(d.tipo!=='ped'||!isAtivo(d))return false;
       if(ini&&(d.dtISO||'')<ini)return false;
       if(fim&&(d.dtISO||'')>fim+'T23:59:59')return false;
-      return true;
+      return cliIds.has(d.cliId)||(d.parceiroId===par.id);
     });
-    const cats=par.cats&&par.cats.length?par.cats:null; // null = todas
-    // Calcula faturamento e lucro filtrando por categoria do parceiro
+    const cats=par.cats&&par.cats.length?par.cats:null;
+    const base=par.base||'lucro';
     function calcPedCat(d){
-      if(!cats)return{fat:d.total,luc:docLucroFil(d,'com')};
-      // Filtra itens pelas categorias do parceiro
+      const totalSub=(d.itens||[]).reduce(function(s,it){return s+it.qtd*it.punit;},0);
+      const fator=totalSub>0?d.total/totalSub:1;
+      if(!cats){
+        const fat=d.total;
+        const fatDesc=d.total; // já tem desconto
+        const sub=(d.itens||[]).reduce(function(s,it){return s+it.qtd*it.punit;},0);
+        const luc=docLucroFil(d,'com');
+        return{fat:sub,fatDesc:fat,luc};
+      }
       const itensFil=(d.itens||[]).filter(function(it){
         const prod=DB.produtos.find(function(p){return p.id===it.pid;});
         return prod&&cats.includes(prod.cat||'');
       });
-      if(!itensFil.length)return{fat:0,luc:0};
+      if(!itensFil.length)return{fat:0,fatDesc:0,luc:0};
       const subTotal=itensFil.reduce(function(s,it){return s+it.qtd*it.punit;},0);
       const subCusto=itensFil.reduce(function(s,it){
         const prod=DB.produtos.find(function(p){return p.id===it.pid;});
         return s+it.qtd*(prod?prod.custo||0:it.custo||0);
       },0);
-      // Aplica proporção do desconto do pedido
-      const totalSub=(d.itens||[]).reduce(function(s,it){return s+it.qtd*it.punit;},0);
-      const fator=totalSub>0?d.total/totalSub:1;
-      const fatCat=Math.round(subTotal*fator*100)/100;
+      const fatCat=Math.round(subTotal*100)/100;
+      const fatDescCat=Math.round(subTotal*fator*100)/100;
       const lucCat=Math.round((subTotal*fator-subCusto)*100)/100;
-      return{fat:fatCat,luc:lucCat};
+      return{fat:fatCat,fatDesc:fatDescCat,luc:lucCat};
     }
     const fat=peds.reduce(function(s,d){return s+calcPedCat(d).fat;},0);
+    const fatDesc=peds.reduce(function(s,d){return s+calcPedCat(d).fatDesc;},0);
     const luc=peds.reduce(function(s,d){return s+calcPedCat(d).luc;},0);
-    const com=Math.round(luc*(par.comissao||0)/100*100)/100;
-    return{par,clientes:clientes.length,peds:peds.length,fat,luc,com};
+    // Base de cálculo da comissão
+    const baseVal=base==='lucro'?luc:base==='faturamento'?fat:fatDesc;
+    const comBruta=Math.round(baseVal*(par.comissao||0)/100*100)/100;
+    // Desconta comissões já pagas
+    // jaPago = total histórico pago (sem filtro de data — comissão paga é paga)
+    const jaPago=(par.pagamentos||[]).reduce(function(s,p){return s+(p.valor||0);},0);
+    const comLiquida=Math.max(0,Math.round((comBruta-jaPago)*100)/100);
+    // Verifica meta mínima
+    const atingiuMeta=(par.meta||0)===0||comBruta>=(par.meta||0);
+    return{par,clientes:clientes.length,peds:peds.length,fat,fatDesc,luc,comBruta,jaPago,comLiquida,atingiuMeta,base};
   });
 
   // KPIs globais
   const totalFat=metricas.reduce((s,m)=>s+m.fat,0);
   const totalLuc=metricas.reduce((s,m)=>s+m.luc,0);
-  const totalCom=metricas.reduce((s,m)=>s+m.com,0);
-  const totalCli=(DB.clientes||[]).filter(c=>c.indicadorId).length;
+  const totalCom=metricas.reduce((s,m)=>s+m.comBruta,0);
+  const totalPendente=metricas.reduce((s,m)=>s+m.comLiquida,0);
+  const totalCli=(DB.clientes||[]).filter(c=>(c.indicadores||[]).length>0).length;
   const kpisEl=document.getElementById('par-kpis');
   if(kpisEl)kpisEl.innerHTML=[
     {l:'Parceiros Ativos',v:DB.parceiros.length,c:'#3b82f6',s:'cadastrados'},
     {l:'Clientes Indicados',v:totalCli,c:'#f97316',s:'total geral'},
     {l:'Faturamento Gerado',v:fmt(totalFat),c:'#10b981',s:'pelas indicações'},
-    {l:'Comissão Total',v:fmt(totalCom),c:'#a78bfa',s:'a pagar aos parceiros'},
+    {l:'Comissão Total',v:fmt(totalCom),c:'#a78bfa',s:'período'},
+    {l:'Comissão Pendente',v:fmt(totalPendente),c:'#ef4444',s:'ainda a pagar'},
   ].map(k=>`<div class="kpi"><div class="kv" style="color:${k.c}">${k.v}</div><div class="kl">${k.l}</div><div class="ks">${k.s}</div></div>`).join('');
 
   // Tabela
   const tbody=document.getElementById('par-tbody');
   if(!tbody)return;
   tbody.innerHTML=metricas.length?metricas.map(function(m){
-    const{par,clientes,peds,fat,luc,com}=m;
+    const{par,clientes,peds,fat,fatDesc,luc,comBruta,jaPago,comLiquida,atingiuMeta,base}=m;
     const tipoCor={Pedreiro:'#f97316',Eletricista:'#f59e0b',Encanador:'#3b82f6',Pintor:'#10b981',
       'Mestre de Obras':'#a78bfa',Engenheiro:'#06b6d4',Arquiteto:'#ec4899',Outros:'#6b7280'}[par.tipo]||'#6b7280';
+    const baseLabel=base==='lucro'?'sobre lucro':base==='faturamento'?'sobre fat.':'sobre fat.c/desc';
+    const baseVal=base==='lucro'?luc:base==='faturamento'?fat:fatDesc;
     return`<tr>
       <td>
         <div style="font-weight:700">${par.nome}</div>
@@ -5391,14 +5487,16 @@ function renderParceiros(){
       <td style="font-weight:700;color:#10b981">${fmt(luc)}</td>
       <td style="text-align:center">
         <div style="font-weight:700">${par.comissao||0}%</div>
-        <div style="font-size:10px;color:var(--mt)">sobre lucro</div>
+        <div style="font-size:10px;color:var(--mt)">${baseLabel}</div>
+        ${par.meta?`<div style="font-size:10px;color:${atingiuMeta?'#10b981':'#f59e0b'}">Meta: ${fmt(par.meta)} ${atingiuMeta?'✓':'⚠'}</div>`:''}
       </td>
       <td>
-        <div style="font-weight:800;font-size:15px;color:#a78bfa">${fmt(com)}</div>
-        ${(par.pagamentos||[]).length?`<div style="font-size:10px;color:#10b981;margin-top:2px">✓ Pago: ${fmt((par.pagamentos||[]).reduce(function(s,p){return s+p.valor;},0))}</div>`:''}
+        <div style="font-weight:800;font-size:15px;color:${comLiquida>0?'#ef4444':'#10b981'}">${fmt(comLiquida)}</div>
+        <div style="font-size:10px;color:var(--mt)">Total: ${fmt(comBruta)}</div>
+        ${jaPago>0?`<div style="font-size:10px;color:#10b981">✓ Pago: ${fmt(jaPago)}</div>`:''}
       </td>
       <td><div style="display:flex;gap:4px">
-        <button class="btn bg bsm" onclick="abrirPagComissao('${par.id}','${com.toFixed(2)}')" style="color:#a78bfa;border-color:#a78bfa;font-size:11px" title="Pagar comissão">💜 Pagar</button>
+        <button class="btn bg bsm" onclick="abrirPagComissao('${par.id}','${comLiquida.toFixed(2)}')" style="color:#a78bfa;border-color:#a78bfa;font-size:11px" title="Pagar comissão">💜 Pagar</button>
         <button class="btn bg bsm" onclick="abrirParceiro('${par.id}')">✎</button>
         <button class="btn bd bsm" onclick="delParceiro('${par.id}')">🗑</button>
       </div></td>
@@ -10216,6 +10314,43 @@ function getProximoNumPed(tipo,callback){
 }
 
 // ── Login ──
+
+function renderIndicadoresWrap(indicadoresAtivos){
+  const wrap = document.getElementById('mc-indicadores-wrap');
+  if(!wrap)return;
+  const pars = DB.parceiros||[];
+  if(!pars.length){
+    wrap.innerHTML='<span style="font-size:12px;color:var(--mt)">Nenhum parceiro cadastrado</span>';
+    return;
+  }
+  wrap.innerHTML = pars.map(function(p){
+    const checked = (indicadoresAtivos||[]).includes(p.id);
+    return `<label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;background:var(--bg);border:1px solid var(--br);border-radius:6px;padding:4px 10px">
+      <input type="checkbox" value="${p.id}" ${checked?'checked':''} style="accent-color:var(--or)">
+      ${p.nome} <span style="font-size:11px;color:var(--mt)">(${p.tipo})</span>
+    </label>`;
+  }).join('');
+}
+
+function getIndicadoresSelecionados(){
+  const wrap = document.getElementById('mc-indicadores-wrap');
+  if(!wrap)return[];
+  return Array.from(wrap.querySelectorAll('input[type=checkbox]:checked')).map(function(el){return el.value;});
+}
+
+function populateParceiroSelect(selectId, valorAtual){
+  const sel = document.getElementById(selectId);
+  if(!sel)return;
+  sel.innerHTML = '<option value="">— Nenhum —</option>';
+  (DB.parceiros||[]).forEach(function(p){
+    const opt = document.createElement('option');
+    opt.value = p.id;
+    opt.textContent = p.nome + ' (' + p.tipo + ')';
+    if(p.id === valorAtual) opt.selected = true;
+    sel.appendChild(opt);
+  });
+}
+
 function sincronizarNuvem(){
   // Força recarga da nuvem sem perder nada
   if(!window.db||!window.currentUser){toast('⚠ Sem conexão com a nuvem','#f59e0b');return;}
