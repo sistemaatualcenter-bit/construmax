@@ -175,6 +175,9 @@ select.inp option{background:var(--card2)}
   <button class="nb" onclick="go('config')" id="nav-config">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 4.93a10 10 0 0 0 0 14.14"/></svg>Configurações
   </button>
+  <button class="nb" onclick="go('comanda')" id="nav-comanda" style="background:linear-gradient(135deg,#f97316,#ea580c);color:#fff;border-radius:8px;margin:4px 8px;padding:8px 12px">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>⚡ Comanda Rápida
+  </button>
   <button class="nb" onclick="go('backup')" id="nav-backup">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>Backup
   </button>
@@ -1219,6 +1222,16 @@ select.inp option{background:var(--card2)}
             <div class="fgrp"><label class="fl">Boleto (%)</label><input class="inp" id="cfg-taxa-boleto" type="number" min="0" max="20" step="0.01" placeholder="0,00"></div>
           </div>
         </div>
+        <div style="margin-top:14px">
+          <div style="font-weight:700;font-size:13px;margin-bottom:6px">🎁 Desconto Automático por Forma de Pagamento (%)</div>
+          <div style="font-size:11px;color:var(--mt);margin-bottom:10px">Ao selecionar a forma de pagamento no pedido, o desconto é preenchido automaticamente. O cliente pode editar antes de salvar.</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+            <div class="fgrp"><label class="fl">Dinheiro — desconto (%)</label><input class="inp" id="cfg-desc-dinheiro" type="number" min="0" max="50" step="0.01" placeholder="0,00"></div>
+            <div class="fgrp"><label class="fl">Pix — desconto (%)</label><input class="inp" id="cfg-desc-pix" type="number" min="0" max="50" step="0.01" placeholder="0,00"></div>
+            <div class="fgrp"><label class="fl">Cartão Débito — desconto (%)</label><input class="inp" id="cfg-desc-debito" type="number" min="0" max="50" step="0.01" placeholder="0,00"></div>
+            <div class="fgrp"><label class="fl">Cartão Crédito — desconto (%)</label><input class="inp" id="cfg-desc-credito" type="number" min="0" max="50" step="0.01" placeholder="0,00"></div>
+          </div>
+        </div>
         <button class="btn bp" onclick="salvarConfig()">✓ Salvar</button>
       </div>
     </div>
@@ -1299,6 +1312,96 @@ select.inp option{background:var(--card2)}
 </div>
 
 <!-- BACKUP -->
+<div id="pg-comanda" class="pg">
+  <div class="ph">
+    <div><div class="pt">⚡ Comanda Rápida</div><div style="font-size:11px;color:var(--mt)">Venda rápida de balcão</div></div>
+    <div style="display:flex;gap:8px;align-items:center">
+      <button class="btn bg bsm" onclick="limparComanda()" title="Limpar tudo">🗑 Limpar</button>
+      <button class="btn bg bsm" onclick="scanParaComanda()" title="Ler código de barras">📷 Ler Barras</button>
+    </div>
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 360px;gap:16px;align-items:start">
+    <!-- Coluna esquerda: busca e itens -->
+    <div>
+      <!-- Busca de produto -->
+      <div class="card cp" style="margin-bottom:12px">
+        <div style="display:flex;gap:8px;align-items:flex-end">
+          <div style="flex:1;position:relative">
+            <div class="fl" style="margin-bottom:3px">Buscar Produto</div>
+            <input class="inp" id="cmd-prd-src" placeholder="Nome ou código de barras..." oninput="filtProdComanda()" onkeydown="navDropComanda(event)" autocomplete="off" style="font-size:15px">
+            <div id="cmd-prd-drop" style="display:none;position:absolute;background:var(--card);border:1px solid var(--br);border-radius:9px;z-index:200;width:100%;max-height:280px;overflow-y:auto;box-shadow:0 4px 20px #0003;top:calc(100% + 4px);left:0"></div>
+          </div>
+          <div style="width:80px">
+            <div class="fl" style="margin-bottom:3px">Qtd</div>
+            <input class="inp" id="cmd-qtd" type="number" value="1" min="0.01" step="0.01" style="text-align:center;font-size:15px">
+          </div>
+          <button class="btn bp" onclick="addItemComanda()" style="padding:10px 18px;font-size:14px">+ Adicionar</button>
+        </div>
+      </div>
+      <!-- Tabela de itens -->
+      <div class="card" id="cmd-itens-wrap" style="display:none">
+        <div style="padding:10px 14px;border-bottom:1px solid var(--br2);font-weight:700;font-size:13px">Itens da Comanda</div>
+        <div class="tw"><table>
+          <thead><tr><th>Produto</th><th style="text-align:center">Qtd</th><th style="text-align:right">Preço</th><th style="text-align:right">Total</th><th></th></tr></thead>
+          <tbody id="cmd-tbody"></tbody>
+        </table></div>
+        <div id="cmd-subtotal" style="padding:10px 14px;border-top:1px solid var(--br2);text-align:right;font-size:13px"></div>
+      </div>
+      <div id="cmd-vazio" class="card cp" style="text-align:center;padding:40px;color:var(--mt)">
+        <div style="font-size:32px;margin-bottom:8px">🛒</div>
+        <div>Busque um produto ou leia o código de barras para começar</div>
+      </div>
+    </div>
+    <!-- Coluna direita: finalizar -->
+    <div class="card cp" style="position:sticky;top:16px">
+      <div class="stl" style="margin-bottom:12px">Finalizar Venda</div>
+      <!-- Cliente opcional -->
+      <div class="fgrp" style="margin-bottom:10px">
+        <label class="fl">Cliente (opcional)</label>
+        <div style="position:relative">
+          <input class="inp" id="cmd-cli-src" placeholder="Buscar cliente..." oninput="filtCliComanda()" autocomplete="off">
+          <input type="hidden" id="cmd-cli-id">
+          <div id="cmd-cli-drop" style="display:none;position:absolute;background:var(--card);border:1px solid var(--br);border-radius:9px;z-index:200;width:100%;max-height:180px;overflow-y:auto;box-shadow:0 4px 20px #0003;top:calc(100% + 4px);left:0"></div>
+        </div>
+      </div>
+      <!-- Forma de pagamento -->
+      <div class="fgrp" style="margin-bottom:10px">
+        <label class="fl">Forma de Pagamento</label>
+        <select class="inp" id="cmd-pag" onchange="onPagComanda()" style="font-size:14px">
+          <option value="dinheiro">Dinheiro</option>
+          <option value="pix">Pix</option>
+          <option value="cartão débito">Cartão Débito</option>
+          <option value="cartão crédito">Cartão Crédito</option>
+          <option value="prazo">Prazo</option>
+        </select>
+      </div>
+      <!-- Desconto -->
+      <div class="fgrp" style="margin-bottom:16px">
+        <label class="fl">Desconto (%)</label>
+        <input class="inp" id="cmd-desc" type="number" value="0" min="0" max="100" step="0.1" oninput="calcComanda()" style="font-size:14px">
+      </div>
+      <!-- Totais -->
+      <div id="cmd-totais" style="background:var(--card2);border-radius:10px;padding:12px 14px;margin-bottom:14px">
+        <div style="display:flex;justify-content:space-between;font-size:13px;color:var(--mt);margin-bottom:4px"><span>Subtotal</span><span id="cmd-t-sub">R$ 0,00</span></div>
+        <div style="display:flex;justify-content:space-between;font-size:13px;color:#f59e0b;margin-bottom:4px" id="cmd-t-desc-row" style="display:none"><span>Desconto</span><span id="cmd-t-desc">-</span></div>
+        <div style="display:flex;justify-content:space-between;font-size:18px;font-weight:800;color:var(--or);margin-top:6px;padding-top:8px;border-top:1px solid var(--br2)"><span>Total</span><span id="cmd-t-total">R$ 0,00</span></div>
+      </div>
+      <!-- Observação rápida -->
+      <div class="fgrp" style="margin-bottom:14px">
+        <label class="fl">Observação (opcional)</label>
+        <input class="inp" id="cmd-obs" placeholder="Ex: entrega, nome...">
+      </div>
+      <button class="btn bp" onclick="finalizarComanda()" id="cmd-btn-finalizar" style="width:100%;padding:14px;font-size:16px;font-weight:700" disabled>
+        ✓ Finalizar Venda
+      </button>
+      <button class="btn bg" onclick="imprimirComandaAtual()" id="cmd-btn-imprimir" style="width:100%;padding:10px;font-size:13px;margin-top:8px;display:none">
+        🖨 Imprimir Recibo
+      </button>
+      <div id="cmd-sucesso" style="display:none;margin-top:12px;padding:12px;background:#10b98120;border:1px solid #10b981;border-radius:8px;text-align:center;font-weight:700;color:#10b981"></div>
+    </div>
+  </div>
+</div>
+
 <div id="pg-backup" class="pg">
   <div class="ph"><div class="pt">Backup e Restauração</div></div>
   <div id="bk-storage"></div>
@@ -1905,8 +2008,11 @@ select.inp option{background:var(--card2)}
       <div style="font-weight:700;font-size:12px;margin-bottom:8px">📦 Itens da NF</div>
       <div style="display:flex;gap:7px;flex-wrap:wrap;align-items:flex-end">
         <div style="flex:2;min-width:140px;position:relative">
-          <div class="fl" style="margin-bottom:3px">Produto</div>
-          <input class="inp" id="me-prd-src" placeholder="Buscar ou digitar novo produto..." oninput="filtProdEnt()" onkeydown="navDropEnt(event)">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:3px">
+            <div class="fl" style="margin-bottom:0">Produto</div>
+            <button class="btn bg bsm" onclick="scanParaEntrada()" title="Ler código de barras" style="font-size:11px;padding:2px 8px">📷 Ler Barras</button>
+          </div>
+          <input class="inp" id="me-prd-src" placeholder="Buscar por nome ou código de barras..." oninput="filtProdEnt()" onkeydown="navDropEnt(event)">
           <div id="me-prd-drop" style="display:none;position:absolute;background:var(--card);border:1px solid var(--br);border-radius:9px;z-index:100;max-height:160px;overflow-y:auto;min-width:240px;top:100%;left:0;box-shadow:0 8px 24px #0008"></div>
         </div>
         <div style="width:70px"><div class="fl" style="margin-bottom:3px">Qtd</div><input class="inp" id="me-qtd" type="number" min="0.01" step="0.01" value="1"></div>
@@ -2100,6 +2206,7 @@ function loadDB(){
       if(!DB.config)DB.config={nome:'CONSTRUMAX',end:'',tel:'',cnpj:'',rodape:'Obrigado!',meta:30};
       // Garante campos novos do config que podem estar ausentes em versões antigas
       if(!DB.config.taxas)DB.config.taxas={'cartão crédito':0,'cartão débito':0,'pix':0,'boleto':0};
+      if(!DB.config.descontos_pag)DB.config.descontos_pag={'dinheiro':0,'pix':0,'cartão débito':0,'cartão crédito':0};
       if(!DB.config.prazo)DB.config.prazo=30;
       if(!DB.config.meta)DB.config.meta=30;
       // Salva imediatamente para garantir que os novos campos fiquem no localStorage
@@ -2323,6 +2430,7 @@ function go(pg){
     fornecedores:renderFornecedores,entradas:renderEntradas,
     financeiro:renderFinanceiro,relatorios:renderRelatorios,
     devolucoes:renderDevolucoes,config:renderConfig,backup:renderBackup,
+    comanda:renderComandaPg,
     'cadastro-massa':renderCadMassa,
   }[pg]||function(){})();
 }
@@ -3060,6 +3168,35 @@ function onPagChange(){
     if(tot>0)pagIni.value=tot.toFixed(2);
     pagIni.placeholder='0,00 -- valor recebido agora';
   }
+  // Aplica desconto automático por forma de pagamento
+  const dp=(DB.config.descontos_pag)||{};
+  const pctDesc=dp[forma]||0;
+  if(pctDesc>0){
+    const descAtual=parseFloat(document.getElementById('mdoc-desc')?.value)||0;
+    // Só aplica se o desconto atual for 0 (não sobrescreve desconto já dado)
+    if(descAtual===0){
+      setDescTipo('%');
+      const descEl=document.getElementById('mdoc-desc');
+      if(descEl){
+        descEl.value=pctDesc;
+        calcDoc();
+        // Mostra aviso de desconto automático
+        const hint=document.getElementById('mdoc-desc-hint');
+        if(hint){
+          hint.innerHTML=`🎁 Desconto de <strong>${pctDesc}%</strong> aplicado automaticamente para <strong>${forma}</strong>`;
+          hint.style.display='block';
+          hint.style.color='#10b981';
+        }
+      }
+    }
+  } else {
+    // Restaura hint padrão se não tem desconto automático
+    const hint=document.getElementById('mdoc-desc-hint');
+    if(hint&&hint.style.color==='rgb(16, 185, 129)'){
+      hint.innerHTML='💡 Digite o valor <strong>total final</strong> que o cliente vai pagar (ex: 100,00)';
+      hint.style.color='';
+    }
+  }
 }
 let cliDropIdx=-1;
 function filtCliDoc(){
@@ -3139,10 +3276,14 @@ function filtProdDoc(){
   const res=todos.slice(0,50);
   if(!res.length){drop.style.display='none';return;}
   drop.style.display='block';
-  drop.innerHTML=res.map((p,i)=>`<div data-pid="${p.id}" data-idx="${i}" class="drop-item" style="padding:9px 13px;cursor:pointer;font-size:12.5px;border-bottom:1px solid var(--br2);transition:background .1s">
-    <div style="font-weight:600">${p.nome}</div>
+  const cliIdDrop=document.getElementById('mdoc-cli').value||'';
+  drop.innerHTML=res.map((p,i)=>{
+    const hist=(cliIdDrop&&cliIdDrop!=='cli-anonimo')?getUltimoPrecoClienteProduto(cliIdDrop,p.id):null;
+    const histHtml=hist?`<span style="margin-left:6px;font-size:10px;color:#a78bfa">↩ ${fmt(hist.punit)} em ${hist.dt}</span>`:'';
+    return`<div data-pid="${p.id}" data-idx="${i}" class="drop-item" style="padding:9px 13px;cursor:pointer;font-size:12.5px;border-bottom:1px solid var(--br2);transition:background .1s">
+    <div style="font-weight:600">${p.nome}${histHtml}</div>
     <div style="font-size:11px;color:var(--mt)">${p.barras?p.barras+' · ':''}${p.cod?'Cód: '+p.cod+' · ':''}${fmt(p.preco)} · Est: <strong style="color:${p.est<=p.estMin?'#fca5a5':'var(--gn)'}">${p.est}</strong> ${p.un}</div>
-  </div>`).join('')
+  </div>`;}).join('')
   +(todos.length>50?`<div style="padding:6px 13px;font-size:10.5px;color:#f59e0b;border-top:1px solid var(--br2);background:var(--card2)">⚠ Mostrando 50 de ${todos.length} resultados — refine a busca</div>`:'')
   +`<div style="padding:6px 13px;font-size:10.5px;color:var(--mt2);border-top:1px solid var(--br2);background:var(--card2);border-radius:0 0 9px 9px">↑↓ navegar &nbsp;·&nbsp; Enter ou 2× clique para selecionar</div>`;
   // Posicionamento inteligente
@@ -3193,6 +3334,27 @@ function selProdDoc(pid){
   document.getElementById('mdoc-prd-src').dataset.pid=pid;
   document.getElementById('mdoc-qtd').focus();
 }
+
+function getUltimoPrecoClienteProduto(cliId, pid){
+  // Busca o último pedido ativo do cliente que contém esse produto
+  if(!cliId||!pid)return null;
+  const peds = DB.pedidos
+    .filter(d=>d.tipo==='ped'&&isAtivo(d)&&d.cliId===cliId&&(d.itens||[]).some(it=>it.pid===pid))
+    .sort((a,b)=>(b.dtISO||'').localeCompare(a.dtISO||''));
+  if(!peds.length)return null;
+  const ped = peds[0];
+  const sub = (ped.itens||[]).reduce((s,i)=>s+i.qtd*i.punit,0);
+  const fator = sub>0?(ped.total||sub)/sub:1;
+  const it = (ped.itens||[]).find(i=>i.pid===pid);
+  if(!it)return null;
+  return{
+    punit: Math.round(it.punit*fator*100)/100, // preço com desconto aplicado
+    punitBruto: it.punit, // preço sem desconto
+    dt: ped.dt,
+    num: ped.num,
+  };
+}
+
 function addItemDoc(){
   const src=document.getElementById('mdoc-prd-src');
   const pid=src.dataset.pid;
@@ -3202,14 +3364,23 @@ function addItemDoc(){
   const punit=parseFloat(document.getElementById('mdoc-punit').value)||p.preco;
   const repasse=document.getElementById('mdoc-repasse')?.checked||false;
   if(repasse){
-    // Repasse: sempre linha separada, custo = preço (sem lucro)
     docItens.push({pid,nome:p.nome,barras:p.barras||'',qtd,punit,custo:punit,repasse:true});
     toast('🔄 '+qtd+'x '+p.nome+' adicionado como repasse','#f97316');
   } else {
-    // Normal: agrupa se já existir linha normal do mesmo produto
     const ex=docItens.find(i=>i.pid===pid&&!i.repasse);
     if(ex)ex.qtd+=qtd;
     else docItens.push({pid,nome:p.nome,barras:p.barras||'',qtd,punit,custo:p.custo,repasse:false});
+    // Mostra histórico de preço do cliente para este produto
+    const cliId=document.getElementById('mdoc-cli').value;
+    if(cliId&&cliId!=='cli-anonimo'){
+      const hist=getUltimoPrecoClienteProduto(cliId,pid);
+      if(hist){
+        const diferente=Math.abs(hist.punit-punit)>0.01;
+        const cor=diferente?'#f59e0b':'#10b981';
+        const icone=diferente?'⚠':'✓';
+        toast(`${icone} Última vez: ${fmt(hist.punit)} em ${hist.dt} (${hist.num})${diferente?' — preço diferente':''}`,cor);
+      }
+    }
   }
   src.value='';src.dataset.pid='';
   document.getElementById('mdoc-qtd').value=1;
@@ -3238,11 +3409,22 @@ function renderItensDoc(){
   const fatorDesc=sub>0?(sub-dv)/sub:1;
   // Lucro exclui itens de repasse
   const luc=Math.max(0,docItens.filter(i=>!i.repasse).reduce((s,i)=>s+i.qtd*(i.punit*fatorDesc-i.custo),0));
+  const cliIdDoc=document.getElementById('mdoc-cli').value||'';
   document.getElementById('mdoc-tbody').innerHTML=docItens.map(it=>{
     const lucItem=it.repasse?null:it.qtd*(it.punit*fatorDesc-it.custo);
-    const rmId=it.repasse?it.pid+'__rep':it.pid;
+    // Histórico de preço do cliente para este produto
+    let histHtml='';
+    if(!it.repasse&&cliIdDoc&&cliIdDoc!=='cli-anonimo'){
+      const hist=getUltimoPrecoClienteProduto(cliIdDoc,it.pid);
+      if(hist){
+        const dif=Math.round((it.punit-hist.punit)*100)/100;
+        const cor=dif>0?'#ef4444':dif<0?'#10b981':'#64748b';
+        const seta=dif>0?'↑':dif<0?'↓':'=';
+        histHtml=`<div style="font-size:10px;color:${cor};margin-top:1px">${seta} Última: ${fmt(hist.punit)} em ${hist.dt}</div>`;
+      }
+    }
     return`<tr style="${it.repasse?'opacity:0.75':''}">
-    <td>${it.nome}${it.repasse?'<span style="margin-left:5px;background:#f9731620;color:#f97316;border-radius:4px;padding:1px 5px;font-size:10px;font-weight:700">🔄 Repasse</span>':''}</td>
+    <td>${it.nome}${it.repasse?'<span style="margin-left:5px;background:#f9731620;color:#f97316;border-radius:4px;padding:1px 5px;font-size:10px;font-weight:700">🔄 Repasse</span>':''}${histHtml}</td>
     <td>${it.qtd}</td><td>${fmt(it.punit)}</td>
     <td style="font-weight:700">${fmt(it.qtd*it.punit)}</td>
     <td class="val-luc" style="color:${it.repasse?'var(--mt)':'var(--gn)'}">${it.repasse?'--':fmt(lucItem)}</td>
@@ -6707,6 +6889,9 @@ function filtProdEnt(){
   const q=document.getElementById('me-prd-src').value.toLowerCase();
   const drop=document.getElementById('me-prd-drop');
   if(!q){drop.style.display='none';return;}
+  // Auto-seleciona se código de barras exato digitado
+  const exactBarras=DB.produtos.find(p=>(p.barras||'').toLowerCase()===q.toLowerCase()&&q.length>=6);
+  if(exactBarras){selProdEnt(exactBarras.id);drop.style.display='none';toast('✓ '+exactBarras.nome,'#10b981');return;}
   // Permite "NOVO" para cadastrar produto novo direto
   const todosPrd=DB.produtos.filter(p=>p.nome.toLowerCase().includes(q)||(p.barras||'').includes(q));
   const res=todosPrd.slice(0,50);
@@ -6719,17 +6904,15 @@ function filtProdEnt(){
   }
   html+=res.map((p,i)=>`<div data-pid="${p.id}" data-idx="${i+(res.length===0?1:1)}" class="drop-item-ent" style="padding:8px 11px;cursor:pointer;font-size:12.5px;border-bottom:1px solid var(--br2)">
     <div style="font-weight:600">${p.nome}</div>
-    <div style="font-size:11px;color:var(--mt)">Custo atual: ${fmt(p.custo)} · Est: ${p.est} ${p.un}</div>
+    <div style="font-size:11px;color:var(--mt)">Custo atual: ${fmt(p.custo)} · Est: ${p.est} ${p.un}${p.barras?' · '+p.barras:''}</div>
   </div>`).join('');
   if(!html){drop.style.display='none';return;}
   drop.innerHTML=html;
   drop.querySelectorAll('.drop-item-ent').forEach(el=>{
     el.addEventListener('mouseenter',()=>{dropIdxEnt=parseInt(el.dataset.idx);hilightDropEnt(drop);});
     if(el.dataset.pid==='__novo__'){
-      // "Cadastrar novo produto" -- clique único pois é uma ação, não seleção
       el.addEventListener('click',()=>prepNovoProEnt());
     } else {
-      // Produto existente -- duplo clique ou Enter
       el.addEventListener('dblclick',()=>selProdEnt(el.dataset.pid));
     }
   });
@@ -9846,6 +10029,11 @@ function renderConfig(){
   document.getElementById('cfg-taxa-debito').value=taxas['cartão débito']||0;
   document.getElementById('cfg-taxa-pix').value=taxas['pix']||0;
   document.getElementById('cfg-taxa-boleto').value=taxas['boleto']||0;
+  const dp=c.descontos_pag||{};
+  document.getElementById('cfg-desc-dinheiro').value=dp['dinheiro']||0;
+  document.getElementById('cfg-desc-pix').value=dp['pix']||0;
+  document.getElementById('cfg-desc-debito').value=dp['cartão débito']||0;
+  document.getElementById('cfg-desc-credito').value=dp['cartão crédito']||0;
   document.getElementById('cfg-cats').innerHTML=DB.categorias.map((c,i)=>`
     <div style="display:flex;align-items:center;gap:7px;margin-bottom:5px">
       <span style="flex:1;font-size:12.5px">${c}</span>
@@ -9910,6 +10098,12 @@ function salvarConfig(){
       'cartão débito':parseFloat(document.getElementById('cfg-taxa-debito').value)||0,
       'pix':parseFloat(document.getElementById('cfg-taxa-pix').value)||0,
       'boleto':parseFloat(document.getElementById('cfg-taxa-boleto').value)||0,
+    },
+    descontos_pag:{
+      'dinheiro':parseFloat(document.getElementById('cfg-desc-dinheiro').value)||0,
+      'pix':parseFloat(document.getElementById('cfg-desc-pix').value)||0,
+      'cartão débito':parseFloat(document.getElementById('cfg-desc-debito').value)||0,
+      'cartão crédito':parseFloat(document.getElementById('cfg-desc-credito').value)||0,
     },
   };
   saveDB();toast('✓ Configurações salvas');renderConfig();
@@ -10161,7 +10355,47 @@ function addScanInput(ov){
   inp.onkeydown=e=>{if(e.key==='Enter'&&inp.value)finalizarScan(inp.value);}
   ov.appendChild(inp);setTimeout(()=>inp.focus(),100);
 }
-function finalizarScan(cod){document.getElementById(scanTarget).value=cod;pararScan();toast('✓ Código: '+cod);}
+function finalizarScan(cod){
+  pararScan();
+  if(scanTarget==='__comanda__'){
+    const p=DB.produtos.find(x=>(x.barras||'')===(cod||'').trim());
+    if(p){addItemComandaById(p.id);toast('✓ '+p.nome+' adicionado!','#10b981');}
+    else{document.getElementById('cmd-prd-src').value=cod;toast('⚠ Código '+cod+' não cadastrado','#f59e0b');}
+    return;
+  }
+  if(scanTarget==='__entrada__'){
+    const p=DB.produtos.find(x=>(x.barras||'')===(cod||'').trim());
+    if(p){
+      selProdEnt(p.id);
+      toast('✓ '+p.nome+' encontrado pelo código!','#10b981');
+    } else {
+      document.getElementById('me-prd-src').value=cod;
+      document.getElementById('me-prd-src').dataset.pid='';
+      prepNovoProEnt();
+      const barrasEl=document.getElementById('me-nvo-barras');
+      if(barrasEl)barrasEl.value=cod;
+      toast('⚠ Código '+cod+' não cadastrado — preencha o produto','#f59e0b');
+    }
+    return;
+  }
+  document.getElementById(scanTarget).value=cod;
+  toast('✓ Código: '+cod);
+}
+
+function scanParaEntrada(){
+  scanTarget='__entrada__';
+  const ov=document.getElementById('scan-overlay');ov.style.display='flex';
+  document.getElementById('scan-msg').textContent='Iniciando câmera...';
+  ov.querySelectorAll('input').forEach(e=>e.remove());
+  if(!navigator.mediaDevices){document.getElementById('scan-msg').textContent='Câmera não disponível — digite o código:';addScanInput(ov);return;}
+  navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}}).then(stream=>{
+    scanStream=stream;
+    const video=document.getElementById('scan-video');
+    video.srcObject=stream;video.play();
+    document.getElementById('scan-msg').textContent='Aponte para o código de barras...';
+    addScanInput(ov);
+  }).catch(()=>{document.getElementById('scan-msg').textContent='Câmera negada — digite o código:';addScanInput(ov);});
+}
 function pararScan(){
   if(scanStream)scanStream.getTracks().forEach(t=>t.stop());scanStream=null;
   const ov=document.getElementById('scan-overlay');ov.style.display='none';
@@ -10312,6 +10546,238 @@ function getProximoNumPed(tipo,callback){
     const seq=tipo==='orc'?DB.seq.orc:DB.seq.ped;
     callback(e,prefix+'-'+String(seq).padStart(3,'0'),seq);
   });
+}
+
+
+// ═══════════════════════════════════════════════════════
+// COMANDA RÁPIDA
+// ═══════════════════════════════════════════════════════
+let cmdItens=[];
+let cmdDropIdx=-1;
+let cmdUltimoId=null;
+
+function renderComanda(){
+  const tem=cmdItens.length>0;
+  document.getElementById('cmd-itens-wrap').style.display=tem?'block':'none';
+  document.getElementById('cmd-vazio').style.display=tem?'none':'block';
+  document.getElementById('cmd-btn-finalizar').disabled=!tem;
+  if(!tem){calcComanda();return;}
+  const desc=parseFloat(document.getElementById('cmd-desc').value)||0;
+  const sub=cmdItens.reduce((s,it)=>s+it.qtd*it.punit,0);
+  const dv=Math.round(sub*(desc/100)*100)/100;
+  const tot=Math.max(0,sub-dv);
+  document.getElementById('cmd-tbody').innerHTML=cmdItens.map((it,i)=>`<tr>
+    <td style="font-weight:600">${it.nome}</td>
+    <td style="text-align:center">
+      <div style="display:flex;align-items:center;justify-content:center;gap:4px">
+        <button onclick="cmdQtd(${i},-1)" style="border:none;background:var(--card2);border-radius:4px;width:22px;height:22px;cursor:pointer;font-size:14px">−</button>
+        <span style="min-width:28px;text-align:center">${it.qtd}</span>
+        <button onclick="cmdQtd(${i},1)" style="border:none;background:var(--card2);border-radius:4px;width:22px;height:22px;cursor:pointer;font-size:14px">+</button>
+      </div>
+    </td>
+    <td style="text-align:right">${fmt(it.punit)}</td>
+    <td style="text-align:right;font-weight:700">${fmt(it.qtd*it.punit)}</td>
+    <td><button class="btn bd bsm" onclick="rmCmdItem(${i})">✕</button></td>
+  </tr>`).join('');
+  document.getElementById('cmd-subtotal').innerHTML=`Subtotal: <strong>${fmt(sub)}</strong>${dv>0?` &nbsp;·&nbsp; Desconto: <strong style="color:#f59e0b">-${fmt(dv)}</strong>`:''} &nbsp;·&nbsp; <strong style="color:var(--or)">${fmt(tot)}</strong>`;
+  calcComanda();
+}
+
+function calcComanda(){
+  const sub=cmdItens.reduce((s,it)=>s+it.qtd*it.punit,0);
+  const desc=parseFloat(document.getElementById('cmd-desc').value)||0;
+  const dv=Math.round(sub*(desc/100)*100)/100;
+  const tot=Math.max(0,sub-dv);
+  const subEl=document.getElementById('cmd-t-sub');
+  const totEl=document.getElementById('cmd-t-total');
+  const descEl=document.getElementById('cmd-t-desc');
+  const descRow=document.getElementById('cmd-t-desc-row');
+  if(subEl)subEl.textContent=fmt(sub);
+  if(totEl)totEl.textContent=fmt(tot);
+  if(descRow)descRow.style.display=dv>0?'flex':'none';
+  if(descEl)descEl.textContent='-'+fmt(dv);
+}
+
+function cmdQtd(idx,delta){
+  if(!cmdItens[idx])return;
+  cmdItens[idx].qtd=Math.max(0.01,Math.round((cmdItens[idx].qtd+delta)*100)/100);
+  renderComanda();
+}
+
+function rmCmdItem(idx){
+  cmdItens.splice(idx,1);
+  renderComanda();
+}
+
+function limparComanda(){
+  if(cmdItens.length&&!confirm('Limpar a comanda?'))return;
+  cmdItens=[];cmdUltimoId=null;
+  ['cmd-prd-src','cmd-obs','cmd-cli-src'].forEach(id=>{const e=document.getElementById(id);if(e)e.value='';});
+  document.getElementById('cmd-cli-id').value='';
+  document.getElementById('cmd-desc').value=0;
+  document.getElementById('cmd-qtd').value=1;
+  const s=document.getElementById('cmd-sucesso');if(s)s.style.display='none';
+  const b=document.getElementById('cmd-btn-imprimir');if(b)b.style.display='none';
+  renderComanda();
+  document.getElementById('cmd-prd-src').focus();
+}
+
+function onPagComanda(){
+  const forma=document.getElementById('cmd-pag').value;
+  const dp=(DB.config.descontos_pag)||{};
+  const pct=dp[forma]||0;
+  if(pct>0){
+    const descAtual=parseFloat(document.getElementById('cmd-desc').value)||0;
+    if(descAtual===0){document.getElementById('cmd-desc').value=pct;calcComanda();}
+  }
+}
+
+function filtProdComanda(){
+  cmdDropIdx=-1;
+  const q=document.getElementById('cmd-prd-src').value.toLowerCase().trim();
+  const drop=document.getElementById('cmd-prd-drop');
+  if(!q){drop.style.display='none';return;}
+  const exact=DB.produtos.find(p=>(p.barras||'').toLowerCase()===q&&q.length>=6);
+  if(exact){addItemComandaById(exact.id);drop.style.display='none';return;}
+  const res=DB.produtos.filter(p=>p.nome.toLowerCase().includes(q)||(p.barras||'').includes(q)||(p.cod||'').toLowerCase().includes(q)).slice(0,30);
+  if(!res.length){drop.style.display='none';return;}
+  drop.style.display='block';
+  drop.innerHTML=res.map((p,i)=>`<div data-pid="${p.id}" data-idx="${i}" style="padding:9px 13px;cursor:pointer;font-size:13px;border-bottom:1px solid var(--br2)">
+    <div style="font-weight:600">${p.nome}</div>
+    <div style="font-size:11px;color:var(--mt)">${fmt(p.preco)} · Est: <strong style="color:${p.est<=p.estMin?'#fca5a5':'var(--gn)'}">${p.est}</strong> ${p.un}</div>
+  </div>`).join('');
+  drop.querySelectorAll('[data-pid]').forEach(el=>{
+    el.addEventListener('click',()=>{addItemComandaById(el.dataset.pid);drop.style.display='none';});
+    el.addEventListener('mouseenter',()=>el.style.background='var(--br2)');
+    el.addEventListener('mouseleave',()=>el.style.background='');
+  });
+}
+
+function navDropComanda(e){
+  const drop=document.getElementById('cmd-prd-drop');
+  const items=drop.querySelectorAll('[data-pid]');
+  if(e.key==='Enter'&&!items.length){addItemComanda();return;}
+  if(e.key==='ArrowDown'){e.preventDefault();cmdDropIdx=Math.min(cmdDropIdx+1,items.length-1);}
+  else if(e.key==='ArrowUp'){e.preventDefault();cmdDropIdx=Math.max(cmdDropIdx-1,0);}
+  else if(e.key==='Enter'){e.preventDefault();if(items[cmdDropIdx])items[cmdDropIdx].click();}
+  else if(e.key==='Escape'){drop.style.display='none';}
+  items.forEach((el,i)=>el.style.background=i===cmdDropIdx?'var(--br2)':'');
+}
+
+function addItemComanda(){
+  const q=document.getElementById('cmd-prd-src').value.toLowerCase().trim();
+  if(!q)return;
+  const p=DB.produtos.find(x=>x.nome.toLowerCase()===q||(x.barras||'').toLowerCase()===q);
+  if(p)addItemComandaById(p.id);
+  else toast('⚠ Produto não encontrado','#f59e0b');
+}
+
+function addItemComandaById(pid){
+  const p=DB.produtos.find(x=>x.id===pid);if(!p)return;
+  const qtd=parseFloat(document.getElementById('cmd-qtd').value)||1;
+  const ex=cmdItens.find(i=>i.pid===pid);
+  if(ex)ex.qtd=Math.round((ex.qtd+qtd)*100)/100;
+  else cmdItens.push({pid,nome:p.nome,qtd,punit:p.preco,custo:p.custo});
+  document.getElementById('cmd-prd-src').value='';
+  document.getElementById('cmd-qtd').value=1;
+  document.getElementById('cmd-prd-drop').style.display='none';
+  renderComanda();
+  document.getElementById('cmd-prd-src').focus();
+  toast('✓ '+qtd+'x '+p.nome,'#10b981');
+}
+
+function filtCliComanda(){
+  const q=document.getElementById('cmd-cli-src').value.toLowerCase();
+  const drop=document.getElementById('cmd-cli-drop');
+  if(!q){drop.style.display='none';document.getElementById('cmd-cli-id').value='';return;}
+  const res=DB.clientes.filter(c=>!c.anonimo&&(c.nome.toLowerCase().includes(q)||(c.tel||'').includes(q))).slice(0,10);
+  if(!res.length){drop.style.display='none';return;}
+  drop.style.display='block';
+  drop.innerHTML=res.map(c=>`<div data-id="${c.id}" style="padding:8px 12px;cursor:pointer;font-size:13px;border-bottom:1px solid var(--br2)">
+    <div style="font-weight:600">${c.nome}</div>
+    ${c.tel?`<div style="font-size:11px;color:var(--mt)">${c.tel}</div>`:''}
+  </div>`).join('');
+  drop.querySelectorAll('[data-id]').forEach(el=>{
+    el.addEventListener('click',()=>{
+      const c=DB.clientes.find(x=>x.id===el.dataset.id);
+      if(c){document.getElementById('cmd-cli-src').value=c.nome;document.getElementById('cmd-cli-id').value=c.id;}
+      drop.style.display='none';
+    });
+    el.addEventListener('mouseenter',()=>el.style.background='var(--br2)');
+    el.addEventListener('mouseleave',()=>el.style.background='');
+  });
+}
+
+function scanParaComanda(){
+  scanTarget='__comanda__';
+  const ov=document.getElementById('scan-overlay');ov.style.display='flex';
+  document.getElementById('scan-msg').textContent='Iniciando câmera...';
+  ov.querySelectorAll('input').forEach(e=>e.remove());
+  if(!navigator.mediaDevices){document.getElementById('scan-msg').textContent='Câmera não disponível — digite o código:';addScanInput(ov);return;}
+  navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}}).then(stream=>{
+    scanStream=stream;
+    const video=document.getElementById('scan-video');
+    video.srcObject=stream;video.play();
+    document.getElementById('scan-msg').textContent='Aponte para o código de barras...';
+    addScanInput(ov);
+  }).catch(()=>{document.getElementById('scan-msg').textContent='Câmera negada — digite o código:';addScanInput(ov);});
+}
+
+function finalizarComanda(){
+  if(!cmdItens.length){toast('⚠ Adicione itens','#f59e0b');return;}
+  const btn=document.getElementById('cmd-btn-finalizar');
+  btn.disabled=true;btn.textContent='Salvando...';
+  const cliId=document.getElementById('cmd-cli-id').value||'cli-anonimo';
+  const cli=DB.clientes.find(c=>c.id===cliId)||DB.clientes.find(c=>c.id==='cli-anonimo');
+  const forma=document.getElementById('cmd-pag').value;
+  const desc=parseFloat(document.getElementById('cmd-desc').value)||0;
+  const obs=document.getElementById('cmd-obs').value.trim();
+  const sub=cmdItens.reduce((s,it)=>s+it.qtd*it.punit,0);
+  const dv=Math.round(sub*(desc/100)*100)/100;
+  const total=Math.max(0,sub-dv);
+  const lucro=cmdItens.reduce((s,it)=>s+it.qtd*(it.punit*(1-desc/100)-it.custo),0);
+  const formasAPrazo=['prazo','boleto','receber no local'];
+  const isPrazo=formasAPrazo.includes(forma);
+  const pagamentos=isPrazo?[]:[{id:uid(),dt:hj(),dtISO:dtHtml(),forma,valor:total,obs:''}];
+  getProximoNumPed('ped',function(err,num){
+    const doc={
+      id:uid(),num,tipo:'ped',
+      cliId:cli.id,cliNome:cli.nome,
+      st:isPrazo?'em-aberto':'pago',
+      dt:hj(),dtISO:dtHtml(),
+      pag:forma,desc,descTipo:'%',obs,vend:'',parceiroId:'',
+      itens:cmdItens.map(it=>({pid:it.pid,nome:it.nome,qtd:it.qtd,punit:it.punit,custo:it.custo,repasse:false})),
+      total,lucro,pagamentos,
+    };
+    DB.pedidos.push(doc);
+    baixarEstoque(doc);
+    saveDB();
+    cmdUltimoId=doc.id;
+    btn.disabled=false;btn.textContent='✓ Finalizar Venda';
+    const suc=document.getElementById('cmd-sucesso');
+    suc.style.display='block';suc.textContent='✓ '+num+' salvo! Total: '+fmt(total);
+    document.getElementById('cmd-btn-imprimir').style.display='block';
+    toast('✓ '+num+' — '+fmt(total),'#10b981');
+    setTimeout(function(){
+      cmdItens=[];
+      ['cmd-prd-src','cmd-obs','cmd-cli-src'].forEach(id=>{const e=document.getElementById(id);if(e)e.value='';});
+      document.getElementById('cmd-cli-id').value='';
+      document.getElementById('cmd-desc').value=0;
+      document.getElementById('cmd-qtd').value=1;
+      suc.style.display='none';
+      renderComanda();
+      document.getElementById('cmd-prd-src').focus();
+    },3000);
+  });
+}
+
+function imprimirComandaAtual(){
+  if(cmdUltimoId)imprimirDocId(cmdUltimoId);
+}
+
+function renderComandaPg(){
+  renderComanda();
+  setTimeout(()=>document.getElementById('cmd-prd-src')?.focus(),100);
 }
 
 // ── Login ──
