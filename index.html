@@ -126,6 +126,9 @@ select.inp option{background:var(--card2)}
   <button class="nb active" onclick="go('dashboard')" id="nav-dashboard">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>Dashboard
   </button>
+  <button class="nb" onclick="go('comanda')" id="nav-comanda" style="background:#f97316;color:#fff;border-radius:8px;margin:2px 8px 6px 8px;padding:8px 12px;font-weight:700">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>⚡ Comanda Rápida
+  </button>
   <div class="nav-g">Comercial</div>
   <button class="nb" onclick="go('clientes')" id="nav-clientes">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>Clientes
@@ -175,9 +178,6 @@ select.inp option{background:var(--card2)}
   <button class="nb" onclick="go('config')" id="nav-config">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 4.93a10 10 0 0 0 0 14.14"/></svg>Configurações
   </button>
-  <button class="nb" onclick="go('comanda')" id="nav-comanda" style="background:linear-gradient(135deg,#f97316,#ea580c);color:#fff;border-radius:8px;margin:4px 8px;padding:8px 12px">
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>⚡ Comanda Rápida
-  </button>
   <button class="nb" onclick="go('backup')" id="nav-backup">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>Backup
   </button>
@@ -202,6 +202,9 @@ select.inp option{background:var(--card2)}
 <div id="pg-dashboard" class="pg active">
   <div class="ph">
     <div><div class="pt">Dashboard</div><div style="font-size:11px;color:var(--mt);margin-top:2px" id="dash-date"></div></div>
+    <button class="btn bg bsm" onclick="gerarRelatorioDiaPNG()" title="Exportar relatório do dia como imagem" style="font-size:12px;padding:6px 12px">
+      📸 Relatório do Dia
+    </button>
     <div class="ha">
       <select class="inp" id="dash-tipo" onchange="renderDash()" style="width:155px">
         <option value="">Todos docs</option>
@@ -239,7 +242,6 @@ select.inp option{background:var(--card2)}
     </div>
   </div>
   <div class="kg" id="dash-kpis"></div>
-  <div id="dash-com-alerta" style="display:none;margin-bottom:12px"></div>
   <div class="two" style="margin-bottom:16px">
     <div class="card cp">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
@@ -10548,6 +10550,122 @@ function getProximoNumPed(tipo,callback){
   });
 }
 
+
+function gerarRelatorioDiaPNG(){
+  // Coleta os valores atuais do dashboard
+  const hoje = new Date();
+  const dataHoje = hoje.toLocaleDateString('pt-BR',{weekday:'long',year:'numeric',month:'long',day:'numeric'});
+  const horaAtual = hoje.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});
+
+  // Pega valores diretamente das variáveis do dashboard (recalcula)
+  const cfm = document.getElementById('btn-com')?.classList.contains('on')?'com':'sem';
+  const cd = DB.config.catDestaque||'Grosseiro';
+  const hoje2 = new Date(); hoje2.setHours(0,0,0,0);
+  const hojeStr = hoje2.toISOString().slice(0,10);
+  const pedsFat = DB.pedidos.filter(function(d){
+    if(d.tipo!=='ped'||!isAtivo(d))return false;
+    if(cfm==='sem'){const itGro=(d.itens||[]).filter(it=>getItemCat(it.pid)===cd);if(itGro.length===d.itens.length)return false;}
+    return true;
+  });
+  const totalV = pedsFat.reduce((s,d)=>s+d.total,0);
+  const totalL = pedsFat.reduce((s,d)=>s+docLucroFil(d,cfm),0);
+  const aRec = pedsFat.filter(d=>isAtivo(d)).reduce((s,d)=>s+Math.max(0,docSaldo(d)),0);
+  // Recebido hoje
+  let recHoje = 0;
+  DB.pedidos.filter(d=>d.tipo==='ped'&&isAtivo(d)).forEach(function(d){
+    (d.pagamentos||[]).forEach(function(p){
+      if((p.dtISO||'').slice(0,10)===hojeStr) recHoje+=p.valor||0;
+    });
+  });
+  // Faturamento hoje
+  const fatHoje = DB.pedidos.filter(function(d){
+    return d.tipo==='ped'&&isAtivo(d)&&(d.dtISO||'').slice(0,10)===hojeStr;
+  }).reduce((s,d)=>s+d.total,0);
+  const mg = totalV>0?totalL/totalV:0;
+  const nomeEmpresa = DB.config.nome||'CONSTRUMAX';
+
+  // Gera canvas
+  const W=600,H=420;
+  const canvas=document.createElement('canvas');
+  canvas.width=W*2;canvas.height=H*2; // 2x para melhor resolução
+  const ctx=canvas.getContext('2d');
+  ctx.scale(2,2);
+
+  // Fundo
+  const isDark=document.body.classList.contains('dark')||window.matchMedia('(prefers-color-scheme: dark)').matches;
+  ctx.fillStyle=isDark?'#1a1a1a':'#ffffff';
+  ctx.fillRect(0,0,W,H);
+
+  // Cabeçalho laranja
+  ctx.fillStyle='#f97316';
+  ctx.fillRect(0,0,W,70);
+
+  // Logo / Nome empresa
+  ctx.fillStyle='#ffffff';
+  ctx.font='bold 22px Arial';
+  ctx.fillText(nomeEmpresa,24,32);
+  ctx.font='13px Arial';
+  ctx.fillStyle='#ffffffcc';
+  ctx.fillText('Relatório do Dia — '+dataHoje,24,52);
+  ctx.fillText('Gerado às '+horaAtual,W-140,52);
+
+  // KPIs — 3 colunas x 2 linhas
+  const kpis=[
+    {l:'Faturamento',v:fmt(totalV),s:pedsFat.length+' pedido(s)',c:'#f97316'},
+    {l:'Recebido Hoje',v:fmt(recHoje),s:'Caixa do dia',c:'#10b981'},
+    {l:'A Receber',v:fmt(aRec),s:'Saldo em aberto',c:aRec>0?'#3b82f6':'#10b981'},
+    {l:'Lucro Bruto',v:fmt(totalL),s:'Margem '+(mg*100).toFixed(1)+'%',c:'#a78bfa'},
+    {l:'Faturamento Hoje',v:fmt(fatHoje),s:'Pedidos do dia',c:'#f59e0b'},
+    {l:'Total Pedidos',v:String(pedsFat.length),s:'No período',c:'#64748b'},
+  ];
+
+  const cardW=174,cardH=90,padX=24,padY=86,gapX=12,gapY=10;
+  const cardBg=isDark?'#2a2a2a':'#f8f8f8';
+  const textPrimary=isDark?'#ffffff':'#1a1a1a';
+  const textSecondary=isDark?'#999':'#666';
+
+  kpis.forEach(function(k,i){
+    const col=i%3,row=Math.floor(i/3);
+    const x=padX+col*(cardW+gapX);
+    const y=padY+row*(cardH+gapY);
+    // Card background
+    ctx.fillStyle=cardBg;
+    ctx.beginPath();
+    ctx.roundRect(x,y,cardW,cardH,8);
+    ctx.fill();
+    // Borda colorida esquerda
+    ctx.fillStyle=k.c;
+    ctx.beginPath();
+    ctx.roundRect(x,y,4,cardH,4);
+    ctx.fill();
+    // Valor
+    ctx.fillStyle=k.c;
+    ctx.font='bold 20px Arial';
+    ctx.fillText(k.v,x+14,y+36);
+    // Label
+    ctx.fillStyle=textPrimary;
+    ctx.font='bold 12px Arial';
+    ctx.fillText(k.l,x+14,y+56);
+    // Sub
+    ctx.fillStyle=textSecondary;
+    ctx.font='11px Arial';
+    ctx.fillText(k.s,x+14,y+74);
+  });
+
+  // Rodapé
+  ctx.fillStyle=isDark?'#333':'#f0f0f0';
+  ctx.fillRect(0,H-30,W,30);
+  ctx.fillStyle=textSecondary;
+  ctx.font='10px Arial';
+  ctx.fillText('Gerado pelo CONSTRUMAX · sistemaatualcenter-bit.github.io/construmax',24,H-10);
+
+  // Download
+  const link=document.createElement('a');
+  link.download='relatorio-'+hojeStr+'.png';
+  link.href=canvas.toDataURL('image/png');
+  link.click();
+  toast('✓ Relatório exportado como PNG!','#10b981');
+}
 
 // ═══════════════════════════════════════════════════════
 // COMANDA RÁPIDA
