@@ -2844,6 +2844,9 @@ function renderClientes(){
 }
 
 function abrirCliente(id){
+  syncAntesDe([],function(){_abrirCliente(id);});
+}
+function _abrirCliente(id){
   ['id','nome','cpf','tel','email','end','cidade','uf','obs'].forEach(f=>document.getElementById('mc-'+f).value='');
   document.getElementById('mc-lim').value=0;
   document.getElementById('mc-end-entrega').value='';
@@ -2863,10 +2866,12 @@ function abrirCliente(id){
   openMD('cli');
 }
 function fichaCliente(id){
-  abrirCliente(id);
-  document.querySelectorAll('#md-cli .tab').forEach((t,i)=>t.classList.toggle('active',i===1));
-  document.querySelectorAll('#md-cli .tabp').forEach((t,i)=>t.classList.toggle('active',i===1));
-  renderFichaCliente(id);
+  syncAntesDe([],function(){
+    _abrirCliente(id);
+    document.querySelectorAll('#md-cli .tab').forEach((t,i)=>t.classList.toggle('active',i===1));
+    document.querySelectorAll('#md-cli .tabp').forEach((t,i)=>t.classList.toggle('active',i===1));
+    renderFichaCliente(id);
+  });
 }
 function renderFichaCliente(id){
   if(!id)return;
@@ -4895,6 +4900,9 @@ function calcMg(){
   } else box.style.display='none';
 }
 function abrirProduto(id){
+  syncAntesDe(['produtos'],function(){_abrirProduto(id);});
+}
+function _abrirProduto(id){
   populateCats();
   ['id','nome','barras','cod','un','obs'].forEach(f=>document.getElementById('mp-'+f).value='');
   document.getElementById('mp-custo').value='';document.getElementById('mp-preco').value='';
@@ -5353,6 +5361,9 @@ function renderFornecedores(){
   }).join(''):`<tr><td colspan="9" class="es">Nenhum fornecedor</td></tr>`;
 }
 function abrirFornecedor(id){
+  syncAntesDe([],function(){_abrirFornecedor(id);});
+}
+function _abrirFornecedor(id){
   ['id','nome','cnpj','tel','contato','email','end','cidade','obs'].forEach(f=>document.getElementById('mf-'+f).value='');
   document.getElementById('mf-prazo').value=30;
   document.getElementById('mf-tit').textContent='Novo Fornecedor';
@@ -5406,6 +5417,9 @@ function getParCatsSelected(){
   return Array.from(checks).map(function(c){return c.value;});
 }
 function abrirParceiro(id){
+  syncAntesDe([],function(){_abrirParceiro(id);});
+}
+function _abrirParceiro(id){
   if(!DB.parceiros)DB.parceiros=[];
   document.getElementById('mpar-id').value=id||'';
   document.getElementById('mpar-titulo').textContent=id?'Editar Parceiro':'Novo Parceiro';
@@ -6860,6 +6874,9 @@ function fecharModalEnt(){
   closeMD('ent');
 }
 function abrirEntrada(){
+  syncAntesDe(['produtos'],function(){_abrirEntrada();});
+}
+function _abrirEntrada(){
   nfItens=[];
   ['id','nfnum','valtotal','pdfnome','obs'].forEach(f=>document.getElementById('me-'+f).value='');
   document.getElementById('me-dt').value=dtHtml();
@@ -7348,6 +7365,9 @@ function finMostrarAba(aba){
 // DESPESAS
 // ═══════════════════════════════════════════════════════
 function abrirDespesa(tipo,id){
+  syncAntesDe([],function(){_abrirDespesa(tipo,id);});
+}
+function _abrirDespesa(tipo,id){
   if(!DB.despesas)DB.despesas=[];
   document.getElementById('md-desp-id').value=id||'';
   document.getElementById('md-desp-tipo').value=tipo||'avulsa';
@@ -10563,6 +10583,54 @@ function carregarColecaoGranular(colecao, cb){
       cb(snap.docs.map(function(d){return{...d.data(),_firestoreId:d.id};}));
     })
     .catch(function(){cb([]);});
+}
+
+// ═══════════════════════════════════════════════════════
+// SYNC AUTOMÁTICO — sincroniza silenciosamente antes de editar
+// ═══════════════════════════════════════════════════════
+function syncAntesDe(colecoes, callback){
+  // Se não tem Firebase, executa direto
+  if(!window.db||!window.currentUser){callback();return;}
+  const uid=window.currentUser.uid;
+  const col=window.db.collection('lojas').doc(uid).collection('d');
+  // Sempre busca meta (contém clientes, parceiros, fornecedores, despesas, seq)
+  const docs=['meta'];
+  if(colecoes.includes('produtos'))docs.push('produtos');
+  if(colecoes.includes('pedidos')){docs.push('pedidos1');docs.push('pedidos2');}
+  Promise.all(docs.map(function(d){return col.doc(d).get();}))
+    .then(function(results){
+      const metaDoc=results[0];
+      if(metaDoc&&metaDoc.exists){
+        try{
+          const m=metaDoc.data();
+          // Atualiza seletivamente apenas o que mudou
+          if(m.clientes)DB.clientes=JSON.parse(m.clientes);
+          if(m.seq)DB.seq=JSON.parse(m.seq);
+          if(m.parceiros)DB.parceiros=JSON.parse(m.parceiros);
+          if(m.fornecedores)DB.fornecedores=JSON.parse(m.fornecedores);
+          if(m.despesas)DB.despesas=JSON.parse(m.despesas);
+          if(m.boletos)DB.boletos=JSON.parse(m.boletos);
+          if(m.config)DB.config=JSON.parse(m.config);
+        }catch(e){console.warn('syncAntesDe meta erro:',e);}
+      }
+      // Produtos se solicitado
+      if(colecoes.includes('produtos')&&results[1]&&results[1].exists){
+        try{DB.produtos=JSON.parse(results[1].data().produtos||'[]');}catch(e){}
+      }
+      // Pedidos se solicitado
+      if(colecoes.includes('pedidos')){
+        const p1=docs.includes('pedidos1')?results[docs.indexOf('pedidos1')]:null;
+        const p2=docs.includes('pedidos2')?results[docs.indexOf('pedidos2')]:null;
+        try{
+          const arr1=p1&&p1.exists?JSON.parse(p1.data().pedidos||'[]'):[];
+          const arr2=p2&&p2.exists?JSON.parse(p2.data().pedidos||'[]'):[];
+          DB.pedidos=[...arr1,...arr2];
+        }catch(e){}
+      }
+      localStorage.setItem(KEY,JSON.stringify(DB));
+    })
+    .catch(function(){}) // falha silenciosa
+    .finally(function(){callback();});
 }
 
 // ═══════════════════════════════════════════════════════
