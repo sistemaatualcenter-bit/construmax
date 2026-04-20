@@ -10598,112 +10598,185 @@ function getProximoNumPed(tipo,callback){
 
 
 function gerarRelatorioDiaPNG(){
-  // Coleta os valores atuais do dashboard
-  const hoje = new Date();
-  const dataHoje = hoje.toLocaleDateString('pt-BR',{weekday:'long',year:'numeric',month:'long',day:'numeric'});
-  const horaAtual = hoje.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});
+  // Lê os MESMOS filtros ativos no dashboard
+  const ini = document.getElementById('dash-dt-ini')?.value||'';
+  const fim = document.getElementById('dash-dt-fim')?.value||'';
+  const cfm = catFilModo||'com';
+  const cd  = DB.config.catDestaque||'Grosseiro';
+  const hoje = new Date(); hoje.setHours(0,0,0,0);
+  const hojeStr = hoje.toISOString().slice(0,10);
+  const recIni = ini||hojeStr;
+  const recFim = fim||hojeStr;
 
-  // Pega valores diretamente das variáveis do dashboard (recalcula)
-  const cfm = document.getElementById('btn-com')?.classList.contains('on')?'com':'sem';
-  const cd = DB.config.catDestaque||'Grosseiro';
-  const hoje2 = new Date(); hoje2.setHours(0,0,0,0);
-  const hojeStr = hoje2.toISOString().slice(0,10);
-  const pedsFat = DB.pedidos.filter(function(d){
-    if(d.tipo!=='ped'||!isAtivo(d))return false;
-    if(cfm==='sem'){const itGro=(d.itens||[]).filter(it=>getItemCat(it.pid)===cd);if(itGro.length===d.itens.length)return false;}
-    return true;
-  });
-  const totalV = pedsFat.reduce((s,d)=>s+d.total,0);
-  const totalL = pedsFat.reduce((s,d)=>s+docLucroFil(d,cfm),0);
-  const aRec = pedsFat.filter(d=>isAtivo(d)).reduce((s,d)=>s+Math.max(0,docSaldo(d)),0);
-  // Recebido hoje
-  let recHoje = 0;
-  DB.pedidos.filter(d=>d.tipo==='ped'&&isAtivo(d)).forEach(function(d){
-    (d.pagamentos||[]).forEach(function(p){
-      if((p.dtISO||'').slice(0,10)===hojeStr) recHoje+=p.valor||0;
+  // Filtra pedidos igual ao dashboard
+  let docs = DB.pedidos;
+  if(ini||fim){
+    docs = docs.filter(function(d){
+      const dt = dtParse(d.dtISO||d.dt); if(!dt) return true;
+      if(ini && dt < new Date(ini)) return false;
+      if(fim && dt > new Date(fim+'T23:59:59')) return false;
+      return true;
     });
-  });
-  // Faturamento hoje
-  const fatHoje = DB.pedidos.filter(function(d){
-    return d.tipo==='ped'&&isAtivo(d)&&(d.dtISO||'').slice(0,10)===hojeStr;
-  }).reduce((s,d)=>s+d.total,0);
-  const mg = totalV>0?totalL/totalV:0;
-  const nomeEmpresa = DB.config.nome||'CONSTRUMAX';
+  }
+  const pedsFat = docs.filter(function(d){return d.tipo==='ped'&&isAtivo(d);});
 
-  // Gera canvas
-  const W=600,H=420;
+  // KPIs usando mesmas funções do dashboard
+  const totalV  = pedsFat.reduce(function(s,d){return s+docTotalFil(d,cfm);},0);
+  const totalL  = pedsFat.reduce(function(s,d){return s+docLucroFil(d,cfm);},0);
+  const mg      = totalV>0?(totalL/totalV)*100:0;
+  const aRec    = DB.pedidos.filter(function(d){return d.tipo==='ped'&&isAtivo(d)&&docSaldo(d)>0;})
+                    .reduce(function(s,d){return s+Math.max(0,docSaldo(d));},0);
+
+  // Recebido no período (mesmo cálculo do dashboard)
+  let totalRecebido=0;
+  DB.pedidos.filter(function(d){return d.tipo==='ped'&&isAtivo(d);}).forEach(function(d){
+    const pagPeriodo=(d.pagamentos||[]).filter(function(p){
+      const pdt=p.dtISO||''; if(!pdt)return false;
+      return pdt>=recIni&&pdt<=recFim+'T23:59:59';
+    }).reduce(function(s,p){return s+p.valor;},0);
+    if(cfm==='sem'){
+      const sub=(d.itens||[]).reduce(function(s,i){return s+i.qtd*i.punit;},0);
+      const subSem=filtItens(d.itens||[],cfm).reduce(function(s,i){return s+i.qtd*i.punit;},0);
+      const ratio=sub>0?subSem/sub:1;
+      totalRecebido+=pagPeriodo*ratio;
+    } else {
+      totalRecebido+=pagPeriodo;
+    }
+  });
+
+  // Labels do período
+  const nomeEmpresa = DB.config.nome||'CONSTRUMAX';
+  const agora = new Date();
+  const horaAtual = agora.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});
+  let periodoLabel = 'Hoje — '+agora.toLocaleDateString('pt-BR',{day:'2-digit',month:'long',year:'numeric'});
+  if(ini&&fim&&ini===fim) periodoLabel = ini.split('-').reverse().join('/');
+  else if(ini&&fim) periodoLabel = ini.split('-').reverse().join('/')+' até '+fim.split('-').reverse().join('/');
+  else if(ini) periodoLabel = 'A partir de '+ini.split('-').reverse().join('/');
+  else if(fim) periodoLabel = 'Até '+fim.split('-').reverse().join('/');
+
+  // ── CANVAS ──
+  const W=640, H=460;
   const canvas=document.createElement('canvas');
-  canvas.width=W*2;canvas.height=H*2; // 2x para melhor resolução
+  canvas.width=W*2; canvas.height=H*2;
   const ctx=canvas.getContext('2d');
   ctx.scale(2,2);
 
-  // Fundo
-  const isDark=document.body.classList.contains('dark')||window.matchMedia('(prefers-color-scheme: dark)').matches;
-  ctx.fillStyle=isDark?'#1a1a1a':'#ffffff';
+  // Fundo branco limpo
+  ctx.fillStyle='#ffffff';
   ctx.fillRect(0,0,W,H);
 
-  // Cabeçalho laranja
+  // Faixa laranja topo
   ctx.fillStyle='#f97316';
-  ctx.fillRect(0,0,W,70);
+  ctx.fillRect(0,0,W,80);
 
-  // Logo / Nome empresa
+  // Linha decorativa embaixo do header
+  ctx.fillStyle='#ea580c';
+  ctx.fillRect(0,78,W,4);
+
+  // Nome empresa
   ctx.fillStyle='#ffffff';
-  ctx.font='bold 22px Arial';
-  ctx.fillText(nomeEmpresa,24,32);
-  ctx.font='13px Arial';
-  ctx.fillStyle='#ffffffcc';
-  ctx.fillText('Relatório do Dia — '+dataHoje,24,52);
-  ctx.fillText('Gerado às '+horaAtual,W-140,52);
+  ctx.font='bold 26px Arial';
+  ctx.fillText(nomeEmpresa,24,38);
 
-  // KPIs — 3 colunas x 2 linhas
+  // Subtítulo
+  ctx.font='13px Arial';
+  ctx.fillStyle='rgba(255,255,255,0.85)';
+  ctx.fillText('Relatório de Desempenho',24,58);
+  ctx.fillText('Gerado às '+horaAtual,24,74);
+
+  // Período no canto direito
+  ctx.fillStyle='rgba(255,255,255,0.95)';
+  ctx.font='bold 13px Arial';
+  const pW = ctx.measureText(periodoLabel).width;
+  ctx.fillText(periodoLabel, W-pW-20, 46);
+  ctx.font='11px Arial';
+  ctx.fillStyle='rgba(255,255,255,0.7)';
+  ctx.fillText('Período', W-ctx.measureText('Período').width-20, 64);
+
+  // ── 3 KPIs principais em linha ──
   const kpis=[
-    {l:'Faturamento',v:fmt(totalV),s:pedsFat.length+' pedido(s)',c:'#f97316'},
-    {l:'Recebido Hoje',v:fmt(recHoje),s:'Caixa do dia',c:'#10b981'},
-    {l:'A Receber',v:fmt(aRec),s:'Saldo em aberto',c:aRec>0?'#3b82f6':'#10b981'},
-    {l:'Lucro Bruto',v:fmt(totalL),s:'Margem '+(mg*100).toFixed(1)+'%',c:'#a78bfa'},
-    {l:'Faturamento Hoje',v:fmt(fatHoje),s:'Pedidos do dia',c:'#f59e0b'},
-    {l:'Total Pedidos',v:String(pedsFat.length),s:'No período',c:'#64748b'},
+    {l:'Faturamento',  v:fmt(totalV),       s:pedsFat.length+' pedido(s)', c:'#f97316', bg:'#fff7ed'},
+    {l:'Recebido',     v:fmt(totalRecebido), s:'No período',               c:'#10b981', bg:'#f0fdf4'},
+    {l:'Lucro Bruto',  v:fmt(totalL),        s:'Margem '+mg.toFixed(1)+'%',c:'#8b5cf6', bg:'#f5f3ff'},
   ];
 
-  const cardW=174,cardH=90,padX=24,padY=86,gapX=12,gapY=10;
-  const cardBg=isDark?'#2a2a2a':'#f8f8f8';
-  const textPrimary=isDark?'#ffffff':'#1a1a1a';
-  const textSecondary=isDark?'#999':'#666';
+  const bigW=192, bigH=110, bigY=100, bigGap=16;
+  const bigStartX = (W - (3*bigW + 2*bigGap))/2;
 
   kpis.forEach(function(k,i){
-    const col=i%3,row=Math.floor(i/3);
-    const x=padX+col*(cardW+gapX);
-    const y=padY+row*(cardH+gapY);
-    // Card background
-    ctx.fillStyle=cardBg;
-    ctx.beginPath();
-    ctx.roundRect(x,y,cardW,cardH,8);
-    ctx.fill();
-    // Borda colorida esquerda
+    const x = bigStartX + i*(bigW+bigGap);
+    const y = bigY;
+    // Card shadow effect
+    ctx.fillStyle='#00000010';
+    ctx.beginPath(); ctx.roundRect(x+2,y+2,bigW,bigH,10); ctx.fill();
+    // Card
+    ctx.fillStyle=k.bg;
+    ctx.beginPath(); ctx.roundRect(x,y,bigW,bigH,10); ctx.fill();
+    // Borda top colorida
     ctx.fillStyle=k.c;
-    ctx.beginPath();
-    ctx.roundRect(x,y,4,cardH,4);
-    ctx.fill();
+    ctx.beginPath(); ctx.roundRect(x,y,bigW,5,3); ctx.fill();
     // Valor
     ctx.fillStyle=k.c;
-    ctx.font='bold 20px Arial';
-    ctx.fillText(k.v,x+14,y+36);
+    ctx.font='bold 22px Arial';
+    ctx.textAlign='center';
+    ctx.fillText(k.v, x+bigW/2, y+52);
     // Label
-    ctx.fillStyle=textPrimary;
-    ctx.font='bold 12px Arial';
-    ctx.fillText(k.l,x+14,y+56);
+    ctx.fillStyle='#1a1a1a';
+    ctx.font='bold 13px Arial';
+    ctx.fillText(k.l, x+bigW/2, y+74);
     // Sub
-    ctx.fillStyle=textSecondary;
+    ctx.fillStyle='#777';
     ctx.font='11px Arial';
-    ctx.fillText(k.s,x+14,y+74);
+    ctx.fillText(k.s, x+bigW/2, y+92);
+    ctx.textAlign='left';
   });
 
-  // Rodapé
-  ctx.fillStyle=isDark?'#333':'#f0f0f0';
-  ctx.fillRect(0,H-30,W,30);
-  ctx.fillStyle=textSecondary;
+  // ── Linha divisória ──
+  ctx.fillStyle='#f0f0f0';
+  ctx.fillRect(24, bigY+bigH+20, W-48, 1);
+
+  // ── 3 KPIs secundários ──
+  const kpis2=[
+    {l:'A Receber',    v:fmt(aRec),                   s:'Saldo em aberto',           c:'#3b82f6'},
+    {l:'Pedidos',      v:String(pedsFat.length),       s:'No período filtrado',       c:'#f59e0b'},
+    {l:'Ticket Médio', v:pedsFat.length>0?fmt(totalV/pedsFat.length):'R$ 0,00', s:'Faturamento ÷ pedidos', c:'#ec4899'},
+  ];
+
+  const smW=180, smH=80, smY=bigY+bigH+36, smGap=18;
+  const smStartX = (W - (3*smW + 2*smGap))/2;
+
+  kpis2.forEach(function(k,i){
+    const x = smStartX + i*(smW+smGap);
+    const y = smY;
+    ctx.fillStyle='#f8f8f8';
+    ctx.beginPath(); ctx.roundRect(x,y,smW,smH,8); ctx.fill();
+    // Barra esquerda
+    ctx.fillStyle=k.c;
+    ctx.beginPath(); ctx.roundRect(x,y,4,smH,4); ctx.fill();
+    // Valor
+    ctx.fillStyle=k.c;
+    ctx.font='bold 19px Arial';
+    ctx.fillText(k.v, x+14, y+32);
+    // Label
+    ctx.fillStyle='#1a1a1a';
+    ctx.font='bold 12px Arial';
+    ctx.fillText(k.l, x+14, y+52);
+    // Sub
+    ctx.fillStyle='#888';
+    ctx.font='10px Arial';
+    ctx.fillText(k.s, x+14, y+68);
+  });
+
+  // ── Rodapé ──
+  ctx.fillStyle='#f97316';
+  ctx.fillRect(0,H-36,W,36);
+  ctx.fillStyle='#ffffff';
+  ctx.font='bold 11px Arial';
+  ctx.fillText(nomeEmpresa+' · Sistema de Gestão', 20, H-20);
+  ctx.fillStyle='rgba(255,255,255,0.75)';
   ctx.font='10px Arial';
-  ctx.fillText('Gerado pelo CONSTRUMAX · sistemaatualcenter-bit.github.io/construmax',24,H-10);
+  const rodape = 'sistemaatualcenter-bit.github.io/construmax';
+  ctx.fillText(rodape, W-ctx.measureText(rodape).width-20, H-20);
 
   // Download
   const link=document.createElement('a');
