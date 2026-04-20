@@ -1331,11 +1331,11 @@ select.inp option{background:var(--card2)}
           <div style="flex:1;position:relative">
             <div class="fl" style="margin-bottom:3px">Buscar Produto</div>
             <input class="inp" id="cmd-prd-src" placeholder="Nome ou código de barras..." oninput="filtProdComanda()" onkeydown="navDropComanda(event)" autocomplete="off" style="font-size:15px">
-            <div id="cmd-prd-drop" style="display:none;position:absolute;background:var(--card);border:1px solid var(--br);border-radius:9px;z-index:200;width:100%;max-height:280px;overflow-y:auto;box-shadow:0 4px 20px #0003;top:calc(100% + 4px);left:0"></div>
+            <div id="cmd-prd-drop" style="display:none;position:absolute;top:calc(100% + 4px);left:0;width:100%;background:var(--card);border:1px solid var(--br);border-radius:9px;z-index:9999;max-height:280px;overflow-y:auto;box-shadow:0 4px 20px #0003"></div>
           </div>
           <div style="width:80px">
             <div class="fl" style="margin-bottom:3px">Qtd</div>
-            <input class="inp" id="cmd-qtd" type="number" value="1" min="0.01" step="0.01" style="text-align:center;font-size:15px">
+            <input class="inp" id="cmd-qtd" type="number" value="1" min="0.01" step="0.01" style="text-align:center;font-size:15px" onkeydown="if(event.key==='Enter'){event.preventDefault();const pid=document.getElementById('cmd-prd-src').dataset.pid;if(pid)addItemComandaById(pid);else addItemComanda();}">
           </div>
           <button class="btn bp" onclick="addItemComanda()" style="padding:10px 18px;font-size:14px">+ Adicionar</button>
         </div>
@@ -10973,7 +10973,7 @@ function filtProdComanda(){
   const drop=document.getElementById('cmd-prd-drop');
   if(!q){drop.style.display='none';return;}
   const exact=DB.produtos.find(p=>(p.barras||'').toLowerCase()===q&&q.length>=6);
-  if(exact){addItemComandaById(exact.id);drop.style.display='none';return;}
+  if(exact){selecionarProdComanda(exact.id);return;}
   const res=DB.produtos.filter(p=>p.nome.toLowerCase().includes(q)||(p.barras||'').includes(q)||(p.cod||'').toLowerCase().includes(q)).slice(0,30);
   if(!res.length){drop.style.display='none';return;}
   drop.style.display='block';
@@ -10981,22 +10981,80 @@ function filtProdComanda(){
     <div style="font-weight:600">${p.nome}</div>
     <div style="font-size:11px;color:var(--mt)">${fmt(p.preco)} · Est: <strong style="color:${p.est<=p.estMin?'#fca5a5':'var(--gn)'}">${p.est}</strong> ${p.un}</div>
   </div>`).join('');
+  // Posicionamento automático via position:absolute no container
   drop.querySelectorAll('[data-pid]').forEach(el=>{
-    el.addEventListener('click',()=>{addItemComandaById(el.dataset.pid);drop.style.display='none';});
-    el.addEventListener('mouseenter',()=>el.style.background='var(--br2)');
+    el.addEventListener('click',()=>{selecionarProdComanda(el.dataset.pid);});
+    el.addEventListener('mouseenter',()=>{
+      cmdDropIdx=parseInt(el.dataset.idx);
+      drop.querySelectorAll('[data-pid]').forEach((e,i)=>e.style.background=i===cmdDropIdx?'var(--br2)':'');
+    });
     el.addEventListener('mouseleave',()=>el.style.background='');
   });
+}
+
+function reposicionarDropComanda(){
+  const src=document.getElementById('cmd-prd-src');
+  const drop=document.getElementById('cmd-prd-drop');
+  if(!src||!drop||drop.style.display==='none')return;
+  const rect=src.getBoundingClientRect();
+  drop.style.position='fixed';
+  drop.style.left=rect.left+'px';
+  drop.style.width=rect.width+'px';
+  drop.style.top=(rect.bottom+4)+'px';
+  drop.style.maxHeight='280px';
+  drop.style.zIndex='9999';
+}
+
+function selecionarProdComanda(pid){
+  // Seleciona o produto e foca no campo de quantidade para o usuário confirmar
+  const p=DB.produtos.find(x=>x.id===pid);if(!p)return;
+  const src=document.getElementById('cmd-prd-src');
+  const drop=document.getElementById('cmd-prd-drop');
+  src.value=p.nome;
+  src.dataset.pid=pid;
+  drop.style.display='none';
+  // Foca no campo de quantidade
+  const qtdEl=document.getElementById('cmd-qtd');
+  if(qtdEl){
+    qtdEl.value=1;
+    qtdEl.select();
+    qtdEl.focus();
+  }
 }
 
 function navDropComanda(e){
   const drop=document.getElementById('cmd-prd-drop');
   const items=drop.querySelectorAll('[data-pid]');
-  if(e.key==='Enter'&&!items.length){addItemComanda();return;}
-  if(e.key==='ArrowDown'){e.preventDefault();cmdDropIdx=Math.min(cmdDropIdx+1,items.length-1);}
-  else if(e.key==='ArrowUp'){e.preventDefault();cmdDropIdx=Math.max(cmdDropIdx-1,0);}
-  else if(e.key==='Enter'){e.preventDefault();if(items[cmdDropIdx])items[cmdDropIdx].click();}
-  else if(e.key==='Escape'){drop.style.display='none';}
-  items.forEach((el,i)=>el.style.background=i===cmdDropIdx?'var(--br2)':'');
+  if(e.key==='Escape'){drop.style.display='none';cmdDropIdx=-1;return;}
+  if(e.key==='ArrowDown'){
+    e.preventDefault();
+    cmdDropIdx=Math.min(cmdDropIdx+1,items.length-1);
+    items.forEach((el,i)=>el.style.background=i===cmdDropIdx?'var(--br2)':'');
+    if(items[cmdDropIdx])items[cmdDropIdx].scrollIntoView({block:'nearest'});
+    return;
+  }
+  if(e.key==='ArrowUp'){
+    e.preventDefault();
+    cmdDropIdx=Math.max(cmdDropIdx-1,0);
+    items.forEach((el,i)=>el.style.background=i===cmdDropIdx?'var(--br2)':'');
+    if(items[cmdDropIdx])items[cmdDropIdx].scrollIntoView({block:'nearest'});
+    return;
+  }
+  if(e.key==='Enter'){
+    e.preventDefault();
+    if(items.length>0){
+      // Seleciona o destacado ou o primeiro — vai para campo de qtd
+      const idx=cmdDropIdx>=0?cmdDropIdx:0;
+      if(items[idx])selecionarProdComanda(items[idx].dataset.pid);
+    } else {
+      // Sem dropdown aberto — tenta selecionar pelo nome e ir para qtd
+      const q=document.getElementById('cmd-prd-src').value.toLowerCase().trim();
+      if(!q)return;
+      const p=DB.produtos.find(x=>x.nome.toLowerCase()===q||(x.barras||'').toLowerCase()===q);
+      if(p)selecionarProdComanda(p.id);
+      else toast('⚠ Produto não encontrado — use as setas para selecionar','#f59e0b');
+    }
+  }
 }
 
 function addItemComanda(){
@@ -11013,11 +11071,12 @@ function addItemComandaById(pid){
   const ex=cmdItens.find(i=>i.pid===pid);
   if(ex)ex.qtd=Math.round((ex.qtd+qtd)*100)/100;
   else cmdItens.push({pid,nome:p.nome,qtd,punit:p.preco,custo:p.custo});
-  document.getElementById('cmd-prd-src').value='';
+  const src=document.getElementById('cmd-prd-src');
+  src.value='';src.dataset.pid='';
   document.getElementById('cmd-qtd').value=1;
   document.getElementById('cmd-prd-drop').style.display='none';
   renderComanda();
-  document.getElementById('cmd-prd-src').focus();
+  src.focus();
   toast('✓ '+qtd+'x '+p.nome,'#10b981');
 }
 
@@ -11112,7 +11171,15 @@ function imprimirComandaAtual(){
 
 function renderComandaPg(){
   renderComanda();
-  setTimeout(()=>document.getElementById('cmd-prd-src')?.focus(),100);
+  setTimeout(()=>{
+    const src=document.getElementById('cmd-prd-src');
+    if(src)src.focus();
+    // Reposiciona dropdown ao fazer scroll
+    const main=document.querySelector('.main')||document.body;
+    main.addEventListener('scroll',function(){
+      reposicionarDropComanda();
+    },{passive:true});
+  },100);
 }
 
 // ── Login ──
