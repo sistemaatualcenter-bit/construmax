@@ -96,8 +96,8 @@ select.inp option{background:var(--card2)}
 .desc-toggle button.on{background:var(--or);color:#fff}
 .pag-row{display:flex;align-items:center;justify-content:space-between;padding:8px 11px;background:var(--card2);border-radius:8px;margin-bottom:5px;font-size:12.5px}
 .crit-header{display:flex;align-items:center;justify-content:space-between;cursor:pointer;padding:3px 0}
-.crit-body{overflow:hidden;transition:max-height .3s;max-height:600px}
-.crit-body.closed{max-height:0}
+.crit-body,#crit-body{overflow:hidden;transition:max-height .3s;max-height:2000px}
+.crit-body.closed,#crit-body.closed{max-height:0}
 .rank-row{display:flex;align-items:center;gap:9px;padding:7px 0;border-bottom:1px solid var(--br2);font-size:12.5px}
 .rank-row:last-child{border-bottom:none}
 .medal{font-size:16px;width:22px;text-align:center}
@@ -131,6 +131,9 @@ select.inp option{background:var(--card2)}
   <button class="nb" onclick="go('pedidos')" id="nav-pedidos">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>Pedidos
   </button>
+  <button class="nb" onclick="go('entregas')" id="nav-entregas">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>Entregas
+  </button>
   <button class="nb" onclick="go('devolucoes')" id="nav-devolucoes">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.29"/></svg>Devoluções
   </button>
@@ -150,6 +153,15 @@ select.inp option{background:var(--card2)}
   <div class="nav-g">Financeiro</div>
   <button class="nb" onclick="go('financeiro')" id="nav-financeiro">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>Financeiro
+  </button>
+  <button class="nb" onclick="go('contas')" id="nav-contas">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="23" y1="11" x2="17" y2="11"/></svg>Contas a Receber
+  </button>
+  <button class="nb" onclick="go('parceiros')" id="nav-parceiros">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>Parceiros
+  </button>
+  <button class="nb" onclick="go('contaspagar')" id="nav-contaspagar">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>Contas a Pagar
   </button>
   <button class="nb" onclick="go('relatorios')" id="nav-relatorios">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>Relatórios
@@ -2346,10 +2358,15 @@ let catFilModo='com'; // 'com' = inclui, 'sem' = exclui
 function setCatFil(modo){
   catFilModo=modo;
   const cd=DB.config.catDestaque||'Grosseiro';
-  const com=document.getElementById('dash-cat-com');
-  const sem=document.getElementById('dash-cat-sem');
-  if(com){com.style.background=modo==='com'?'var(--or)':'var(--card2)';com.style.color=modo==='com'?'#fff':'var(--mt)';com.textContent='COM '+cd;}
-  if(sem){sem.style.background=modo==='sem'?'var(--or)':'var(--card2)';sem.style.color=modo==='sem'?'#fff':'var(--mt)';sem.textContent='SEM '+cd;}
+  // Suporta ambos os IDs (btn-com/btn-sem)
+  ['com','sem'].forEach(function(m){
+    const btn=document.getElementById('btn-'+m)||document.getElementById('dash-cat-'+m);
+    if(!btn)return;
+    const active=m===modo;
+    btn.style.background=active?'var(--or)':'var(--card2)';
+    btn.style.color=active?'#fff':'var(--mt)';
+    btn.textContent=(m==='com'?'COM ':'SEM ')+cd;
+  });
   renderDash();
 }
 // Retorna categoria de um produto pelo pid
@@ -2534,6 +2551,23 @@ function setTopRank(mode){
       </div>
       <div class="bt"><div class="bf" style="width:${(p[cfg.key]/mx)*100}%;background:${cfg.color}"></div></div>
     </div>`).join(''):`<div class="es">Sem vendas no período</div>`;
+}
+function toggleDashModo(){
+  const sel=document.getElementById('dash-modo');
+  const btn=document.getElementById('dash-modo-btn');
+  if(!sel)return;
+  sel.value=sel.value==='recebido'?'total':'recebido';
+  if(btn)btn.textContent=sel.value==='recebido'?'Total':'Recebido';
+  renderDash();
+}
+function limparFiltrosDash(){
+  const ini=document.getElementById('dash-dt-ini');
+  const fim=document.getElementById('dash-dt-fim');
+  const tipo=document.getElementById('dash-tipo');
+  const pag=document.getElementById('dash-pag');
+  if(ini)ini.value='';if(fim)fim.value='';
+  if(tipo)tipo.value='';if(pag)pag.value='';
+  renderDash();
 }
 function renderDash(){
   document.getElementById('dash-date').textContent='Atualizado: '+hj();
