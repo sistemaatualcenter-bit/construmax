@@ -1,4 +1,30 @@
-<!DOCTYPE html>
+<!DOC
+  <!-- TAREFAS DA LOJA -->
+  <div class="card cp" id="dash-tarefas-card" style="margin-bottom:16px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+      <div class="stl" style="margin-bottom:0">📋 Tarefas</div>
+      <div style="display:flex;gap:6px;align-items:center">
+        <span id="dash-tarefas-badge" style="display:none;background:#ef4444;color:#fff;border-radius:10px;padding:1px 8px;font-size:11px;font-weight:700"></span>
+        <button class="btn bg bsm" onclick="abrirNovaTarefa()" style="font-size:12px">+ Nova</button>
+      </div>
+    </div>
+    <!-- Input rápido -->
+    <div id="dash-tarefa-input" style="display:none;margin-bottom:10px;display:flex;gap:6px">
+      <input class="inp" id="dash-tarefa-txt" placeholder="Descrever a tarefa..." style="flex:1" onkeydown="if(event.key==='Enter')salvarTarefa()">
+      <select class="inp" id="dash-tarefa-prio" style="width:100px">
+        <option value="normal">Normal</option>
+        <option value="urgente">🔴 Urgente</option>
+        <option value="baixa">🟡 Baixa</option>
+      </select>
+      <button class="btn bp bsm" onclick="salvarTarefa()">✓</button>
+      <button class="btn bg bsm" onclick="fecharNovaTarefa()">✕</button>
+    </div>
+    <div id="dash-tarefas-lista" style="display:flex;flex-direction:column;gap:6px">
+      <div style="color:var(--mt);font-size:13px;text-align:center;padding:16px 0">Nenhuma tarefa pendente ✓</div>
+    </div>
+  </div>
+
+TYPE html>
 <!-- CONSTRUMAX v8.9.1 -->
 <html lang="pt-BR">
 <head>
@@ -284,6 +310,29 @@ select.inp option{background:var(--card2)}
       <button class="btn bg bsm" onclick="go('contaspagar')" style="font-size:11px">Ver todas →</button>
     </div>
     <div id="dash-boletos"></div>
+  </div>
+  <!-- TAREFAS DA LOJA -->
+  <div class="card cp" style="margin-bottom:16px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+      <div class="stl" style="margin-bottom:0">📋 Tarefas</div>
+      <div style="display:flex;gap:6px;align-items:center">
+        <span id="dash-tarefas-badge" style="display:none;background:#ef4444;color:#fff;border-radius:10px;padding:1px 8px;font-size:11px;font-weight:700"></span>
+        <button class="btn bg bsm" onclick="abrirNovaTarefa()" style="font-size:12px">+ Nova</button>
+      </div>
+    </div>
+    <div id="dash-tarefa-input" style="display:none;gap:6px;margin-bottom:10px">
+      <input class="inp" id="dash-tarefa-txt" placeholder="Descrever a tarefa..." style="flex:1" onkeydown="if(event.key==='Enter')salvarTarefa()">
+      <div style="display:flex;gap:6px;margin-top:6px">
+        <select class="inp" id="dash-tarefa-prio" style="flex:1">
+          <option value="normal">Normal</option>
+          <option value="urgente">🔴 Urgente</option>
+          <option value="baixa">🟡 Baixa</option>
+        </select>
+        <button class="btn bp bsm" onclick="salvarTarefa()" style="padding:8px 16px">✓ Salvar</button>
+        <button class="btn bg bsm" onclick="fecharNovaTarefa()">✕</button>
+      </div>
+    </div>
+    <div id="dash-tarefas-lista" style="display:flex;flex-direction:column;gap:6px"></div>
   </div>
 </div>
 
@@ -2195,6 +2244,7 @@ function loadDB(){
       if(!DB.boletos)DB.boletos=[];
       if(!DB.despesas)DB.despesas=[];
       if(!DB.parceiros)DB.parceiros=[];
+      if(!DB.tarefas)DB.tarefas=[];
       if(!DB.campanhas)DB.campanhas=[];
       // Migra indicadorId (string) → indicadores (array) nos clientes
       DB.clientes=DB.clientes.map(function(c){
@@ -2252,6 +2302,7 @@ function salvarNaNuvem(ts){
     parceiros:JSON.stringify(DB.parceiros||[]),
     boletos:JSON.stringify(DB.boletos||[]),
     despesas:JSON.stringify(DB.despesas||[]),
+    tarefas:JSON.stringify(DB.tarefas||[]),
     fornecedores:JSON.stringify(DB.fornecedores||[]),
     entradas:JSON.stringify(DB.entradas||[]),
     devolucoes:JSON.stringify(DB.devolucoes||[]),
@@ -2819,6 +2870,7 @@ function renderDash(){
   }).join('');
   // Mantém blur se estava ativo
   setTimeout(aplicarBlurValores,0);
+  renderTarefas();
 }
 function impCrit(){
   const low=DB.produtos.filter(p=>p.est<=p.estMin);
@@ -10637,6 +10689,94 @@ function carregarColecaoGranular(colecao, cb){
 }
 
 // ═══════════════════════════════════════════════════════
+// TAREFAS DA LOJA
+// ═══════════════════════════════════════════════════════
+function renderTarefas(){
+  if(!DB.tarefas)DB.tarefas=[];
+  const lista=document.getElementById('dash-tarefas-lista');
+  const badge=document.getElementById('dash-tarefas-badge');
+  if(!lista)return;
+  const pendentes=DB.tarefas.filter(t=>t.st!=='cancelada'&&t.st!=='concluida');
+  const urgentes=pendentes.filter(t=>t.prio==='urgente').length;
+  if(badge){
+    if(pendentes.length>0){badge.style.display='inline';badge.textContent=pendentes.length+(urgentes>0?' ('+urgentes+' urgente'+(urgentes>1?'s':'')+')':'');}
+    else badge.style.display='none';
+  }
+  if(!DB.tarefas.length){
+    lista.innerHTML='<div style="color:var(--mt);font-size:13px;text-align:center;padding:16px 0">Nenhuma tarefa ✓</div>';
+    return;
+  }
+  // Ordem: urgente → normal → baixa, depois concluídas, depois canceladas
+  const ordem={urgente:0,normal:1,baixa:2,concluida:3,cancelada:4};
+  const sorted=[...DB.tarefas].sort(function(a,b){
+    const sa=(a.st==='concluida'?3:a.st==='cancelada'?4:ordem[a.prio]||1);
+    const sb=(b.st==='concluida'?3:b.st==='cancelada'?4:ordem[b.prio]||1);
+    if(sa!==sb)return sa-sb;
+    return (b.dt||'').localeCompare(a.dt||'');
+  });
+  lista.innerHTML=sorted.map(function(t){
+    const concluida=t.st==='concluida';
+    const cancelada=t.st==='cancelada';
+    const inativa=concluida||cancelada;
+    const prioCor={urgente:'#ef4444',normal:'#3b82f6',baixa:'#f59e0b'}[t.prio]||'#3b82f6';
+    const prioLabel={urgente:'🔴',normal:'🔵',baixa:'🟡'}[t.prio]||'🔵';
+    return`<div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--card2);border-radius:8px;border-left:3px solid ${inativa?'var(--br)':prioCor};opacity:${inativa?0.55:1}">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13px;font-weight:${inativa?400:600};text-decoration:${cancelada?'line-through':'none'};color:${concluida?'var(--mt)':'var(--tx)'};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${prioLabel} ${t.txt}</div>
+        <div style="font-size:10px;color:var(--mt);margin-top:2px">${t.dt||''} ${concluida?'· Concluída':''}${cancelada?'· Cancelada':''}</div>
+      </div>
+      ${!inativa?`<button onclick="concluirTarefa('${t.id}')" title="Marcar como concluída" style="border:none;background:#10b98120;color:#10b981;border-radius:6px;padding:4px 8px;cursor:pointer;font-size:14px;flex-shrink:0">✓</button>`:''}
+      ${!inativa?`<button onclick="cancelarTarefa('${t.id}')" title="Cancelar tarefa" style="border:none;background:#ef444420;color:#ef4444;border-radius:6px;padding:4px 8px;cursor:pointer;font-size:14px;flex-shrink:0">✕</button>`:''}
+      <button onclick="delTarefa('${t.id}')" title="Excluir" style="border:none;background:var(--br);color:var(--mt);border-radius:6px;padding:4px 6px;cursor:pointer;font-size:11px;flex-shrink:0">🗑</button>
+    </div>`;
+  }).join('');
+}
+
+function abrirNovaTarefa(){
+  const inp=document.getElementById('dash-tarefa-input');
+  if(inp){inp.style.display='flex';inp.style.flexDirection='column';}
+  const txt=document.getElementById('dash-tarefa-txt');
+  if(txt){txt.value='';txt.focus();}
+  const prio=document.getElementById('dash-tarefa-prio');
+  if(prio)prio.value='normal';
+}
+
+function fecharNovaTarefa(){
+  const inp=document.getElementById('dash-tarefa-input');
+  if(inp)inp.style.display='none';
+}
+
+function salvarTarefa(){
+  const txt=document.getElementById('dash-tarefa-txt')?.value.trim();
+  if(!txt){toast('⚠ Descreva a tarefa','#f59e0b');return;}
+  const prio=document.getElementById('dash-tarefa-prio')?.value||'normal';
+  if(!DB.tarefas)DB.tarefas=[];
+  DB.tarefas.push({id:uid(),txt,prio,st:'pendente',dt:hj(),dtISO:dtHtml()});
+  fecharNovaTarefa();
+  saveDB();
+  renderTarefas();
+  toast('✓ Tarefa adicionada','#10b981');
+}
+
+function concluirTarefa(id){
+  if(!DB.tarefas)return;
+  DB.tarefas=DB.tarefas.map(t=>t.id===id?{...t,st:'concluida',dtConcluida:hj()}:t);
+  saveDB();renderTarefas();toast('✓ Tarefa concluída','#10b981');
+}
+
+function cancelarTarefa(id){
+  if(!DB.tarefas)return;
+  DB.tarefas=DB.tarefas.map(t=>t.id===id?{...t,st:'cancelada'}:t);
+  saveDB();renderTarefas();
+}
+
+function delTarefa(id){
+  if(!confirm('Excluir esta tarefa?'))return;
+  DB.tarefas=DB.tarefas.filter(t=>t.id!==id);
+  saveDB();renderTarefas();
+}
+
+// ═══════════════════════════════════════════════════════
 // SYNC AUTOMÁTICO — sincroniza silenciosamente antes de editar
 // ═══════════════════════════════════════════════════════
 function syncAntesDe(colecoes, callback){
@@ -10717,11 +10857,9 @@ function getProximoNumPed(tipo,callback){
 
 
 function gerarRelatorioDiaPNG(){
-  // Lê os MESMOS filtros ativos no dashboard
   const ini = document.getElementById('dash-dt-ini')?.value||'';
   const fim = document.getElementById('dash-dt-fim')?.value||'';
   const cfm = catFilModo||'com';
-  const cd  = DB.config.catDestaque||'Grosseiro';
   const hoje = new Date(); hoje.setHours(0,0,0,0);
   const hojeStr = hoje.toISOString().slice(0,10);
   const recIni = ini||hojeStr;
@@ -10738,15 +10876,14 @@ function gerarRelatorioDiaPNG(){
     });
   }
   const pedsFat = docs.filter(function(d){return d.tipo==='ped'&&isAtivo(d);});
-
-  // KPIs usando mesmas funções do dashboard
   const totalV  = pedsFat.reduce(function(s,d){return s+docTotalFil(d,cfm);},0);
   const totalL  = pedsFat.reduce(function(s,d){return s+docLucroFil(d,cfm);},0);
   const mg      = totalV>0?(totalL/totalV)*100:0;
   const aRec    = DB.pedidos.filter(function(d){return d.tipo==='ped'&&isAtivo(d)&&docSaldo(d)>0;})
                     .reduce(function(s,d){return s+Math.max(0,docSaldo(d));},0);
 
-  // Lucro proporcional ao recebido
+  // Recebido no período
+  let totalRecebido=0;
   let lucroRec=0;
   DB.pedidos.filter(function(d){return d.tipo==='ped'&&isAtivo(d);}).forEach(function(d){
     const totalPed=d.total||0; if(totalPed<=0)return;
@@ -10755,29 +10892,21 @@ function gerarRelatorioDiaPNG(){
       return pdt>=recIni&&pdt<=recFim+'T23:59:59';
     }).reduce(function(s,p){return s+p.valor;},0);
     if(!pago)return;
-    lucroRec+=docLucroFil(d,cfm)*Math.min(1,pago/totalPed);
-  });
-  lucroRec=Math.max(0,lucroRec);
-  const mgRec2=totalRecebido>0?(lucroRec/totalRecebido)*100:0;
-
-  // Recebido no período (mesmo cálculo do dashboard)
-  let totalRecebido=0;
-  DB.pedidos.filter(function(d){return d.tipo==='ped'&&isAtivo(d);}).forEach(function(d){
-    const pagPeriodo=(d.pagamentos||[]).filter(function(p){
-      const pdt=p.dtISO||''; if(!pdt)return false;
-      return pdt>=recIni&&pdt<=recFim+'T23:59:59';
-    }).reduce(function(s,p){return s+p.valor;},0);
     if(cfm==='sem'){
       const sub=(d.itens||[]).reduce(function(s,i){return s+i.qtd*i.punit;},0);
       const subSem=filtItens(d.itens||[],cfm).reduce(function(s,i){return s+i.qtd*i.punit;},0);
       const ratio=sub>0?subSem/sub:1;
-      totalRecebido+=pagPeriodo*ratio;
+      totalRecebido+=pago*ratio;
+      lucroRec+=docLucroFil(d,cfm)*Math.min(1,pago/totalPed)*ratio;
     } else {
-      totalRecebido+=pagPeriodo;
+      totalRecebido+=pago;
+      lucroRec+=docLucroFil(d,cfm)*Math.min(1,pago/totalPed);
     }
   });
+  lucroRec=Math.max(0,lucroRec);
+  const mgRec=totalRecebido>0?(lucroRec/totalRecebido)*100:0;
 
-  // Labels do período
+  // Labels
   const nomeEmpresa = DB.config.nome||'CONSTRUMAX';
   const agora = new Date();
   const horaAtual = agora.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});
@@ -10787,46 +10916,32 @@ function gerarRelatorioDiaPNG(){
   else if(ini) periodoLabel = 'A partir de '+ini.split('-').reverse().join('/');
   else if(fim) periodoLabel = 'Até '+fim.split('-').reverse().join('/');
 
-  // ── CANVAS ──
   const W=640, H=460;
   const canvas=document.createElement('canvas');
   canvas.width=W*2; canvas.height=H*2;
   const ctx=canvas.getContext('2d');
   ctx.scale(2,2);
 
-  // Fundo branco limpo
-  ctx.fillStyle='#ffffff';
-  ctx.fillRect(0,0,W,H);
+  ctx.fillStyle='#ffffff'; ctx.fillRect(0,0,W,H);
+  ctx.fillStyle='#f97316'; ctx.fillRect(0,0,W,80);
+  ctx.fillStyle='#ea580c'; ctx.fillRect(0,78,W,4);
 
-  // Faixa laranja topo
-  ctx.fillStyle='#f97316';
-  ctx.fillRect(0,0,W,80);
-
-  // Linha decorativa embaixo do header
-  ctx.fillStyle='#ea580c';
-  ctx.fillRect(0,78,W,4);
-
-  // Nome empresa
   ctx.fillStyle='#ffffff';
   ctx.font='bold 26px Arial';
   ctx.fillText(nomeEmpresa,24,38);
-
-  // Subtítulo
   ctx.font='13px Arial';
   ctx.fillStyle='rgba(255,255,255,0.85)';
   ctx.fillText('Relatório de Desempenho',24,58);
   ctx.fillText('Gerado às '+horaAtual,24,74);
 
-  // Período no canto direito
   ctx.fillStyle='rgba(255,255,255,0.95)';
   ctx.font='bold 13px Arial';
-  const pW = ctx.measureText(periodoLabel).width;
-  ctx.fillText(periodoLabel, W-pW-20, 46);
+  const pW=ctx.measureText(periodoLabel).width;
+  ctx.fillText(periodoLabel,W-pW-20,46);
   ctx.font='11px Arial';
   ctx.fillStyle='rgba(255,255,255,0.7)';
-  ctx.fillText('Período', W-ctx.measureText('Período').width-20, 64);
+  ctx.fillText('Período',W-ctx.measureText('Período').width-20,64);
 
-  // ── 3 KPIs principais em linha ──
   const kpis=[
     {l:'Faturamento',  v:fmt(totalV),       s:pedsFat.length+' pedido(s)', c:'#f97316', bg:'#fff7ed'},
     {l:'Recebido',     v:fmt(totalRecebido), s:'No período',               c:'#10b981', bg:'#f0fdf4'},
@@ -10834,89 +10949,55 @@ function gerarRelatorioDiaPNG(){
   ];
 
   const bigW=192, bigH=110, bigY=100, bigGap=16;
-  const bigStartX = (W - (3*bigW + 2*bigGap))/2;
-
+  const bigStartX=(W-(3*bigW+2*bigGap))/2;
   kpis.forEach(function(k,i){
-    const x = bigStartX + i*(bigW+bigGap);
-    const y = bigY;
-    ctx.fillStyle='#00000010';
-    ctx.beginPath(); ctx.roundRect(x+2,y+2,bigW,bigH,10); ctx.fill();
-    ctx.fillStyle=k.bg;
-    ctx.beginPath(); ctx.roundRect(x,y,bigW,bigH,10); ctx.fill();
-    ctx.fillStyle=k.c;
-    ctx.beginPath(); ctx.roundRect(x,y,bigW,5,3); ctx.fill();
-    ctx.fillStyle=k.c;
-    ctx.font='bold 22px Arial';
-    ctx.textAlign='center';
-    ctx.fillText(k.v, x+bigW/2, y+52);
-    ctx.fillStyle='#1a1a1a';
-    ctx.font='bold 13px Arial';
-    ctx.fillText(k.l, x+bigW/2, y+74);
-    ctx.fillStyle='#777';
-    ctx.font='11px Arial';
-    ctx.fillText(k.s, x+bigW/2, y+92);
+    const x=bigStartX+i*(bigW+bigGap), y=bigY;
+    ctx.fillStyle='#00000010'; ctx.beginPath(); ctx.roundRect(x+2,y+2,bigW,bigH,10); ctx.fill();
+    ctx.fillStyle=k.bg; ctx.beginPath(); ctx.roundRect(x,y,bigW,bigH,10); ctx.fill();
+    ctx.fillStyle=k.c; ctx.beginPath(); ctx.roundRect(x,y,bigW,5,3); ctx.fill();
+    ctx.fillStyle=k.c; ctx.font='bold 22px Arial'; ctx.textAlign='center';
+    ctx.fillText(k.v,x+bigW/2,y+52);
+    ctx.fillStyle='#1a1a1a'; ctx.font='bold 13px Arial';
+    ctx.fillText(k.l,x+bigW/2,y+74);
+    ctx.fillStyle='#777'; ctx.font='11px Arial';
+    ctx.fillText(k.s,x+bigW/2,y+92);
     ctx.textAlign='left';
   });
 
-  ctx.fillStyle='#f0f0f0';
-  ctx.fillRect(24, bigY+bigH+20, W-48, 1);
+  ctx.fillStyle='#f0f0f0'; ctx.fillRect(24,bigY+bigH+20,W-48,1);
 
   const kpis2=[
-    {l:'Lucro Recebido', v:fmt(lucroRec),                   s:'Margem '+mgRec2.toFixed(1)+'% recebido',  c:'#10b981'},
-    {l:'A Receber',      v:fmt(aRec),                        s:'Saldo em aberto',                         c:'#3b82f6'},
+    {l:'Lucro Recebido', v:fmt(lucroRec),   s:'Margem '+mgRec.toFixed(1)+'%', c:'#10b981'},
+    {l:'A Receber',      v:fmt(aRec),        s:'Saldo em aberto',              c:'#3b82f6'},
     {l:'Ticket Médio',   v:pedsFat.length>0?fmt(totalV/pedsFat.length):'R$ 0,00', s:'Faturamento ÷ pedidos', c:'#ec4899'},
   ];
-
   const smW=180, smH=80, smY=bigY+bigH+36, smGap=18;
-  const smStartX = (W - (3*smW + 2*smGap))/2;
-
+  const smStartX=(W-(3*smW+2*smGap))/2;
   kpis2.forEach(function(k,i){
-    const x = smStartX + i*(smW+smGap);
-    const y = smY;
-    ctx.fillStyle='#f8f8f8';
-    ctx.beginPath(); ctx.roundRect(x,y,smW,smH,8); ctx.fill();
-    // Barra esquerda
-    ctx.fillStyle=k.c;
-    ctx.beginPath(); ctx.roundRect(x,y,4,smH,4); ctx.fill();
-    // Valor
-    ctx.fillStyle=k.c;
-    ctx.font='bold 19px Arial';
-    ctx.fillText(k.v, x+14, y+32);
-    // Label
-    ctx.fillStyle='#1a1a1a';
-    ctx.font='bold 12px Arial';
-    ctx.fillText(k.l, x+14, y+52);
-    // Sub
-    ctx.fillStyle='#888';
-    ctx.font='10px Arial';
-    ctx.fillText(k.s, x+14, y+68);
+    const x=smStartX+i*(smW+smGap), y=smY;
+    ctx.fillStyle='#f8f8f8'; ctx.beginPath(); ctx.roundRect(x,y,smW,smH,8); ctx.fill();
+    ctx.fillStyle=k.c; ctx.beginPath(); ctx.roundRect(x,y,4,smH,4); ctx.fill();
+    ctx.fillStyle=k.c; ctx.font='bold 19px Arial';
+    ctx.fillText(k.v,x+14,y+32);
+    ctx.fillStyle='#1a1a1a'; ctx.font='bold 12px Arial';
+    ctx.fillText(k.l,x+14,y+52);
+    ctx.fillStyle='#888'; ctx.font='10px Arial';
+    ctx.fillText(k.s,x+14,y+68);
   });
 
-  // ── Rodapé ──
-  ctx.fillStyle='#f97316';
-  ctx.fillRect(0,H-36,W,36);
-  ctx.fillStyle='#ffffff';
-  ctx.font='bold 11px Arial';
-  ctx.fillText(nomeEmpresa+' · Sistema de Gestão', 20, H-20);
-  ctx.fillStyle='rgba(255,255,255,0.75)';
-  ctx.font='10px Arial';
-  const rodape = 'sistemaatualcenter-bit.github.io/construmax';
-  ctx.fillText(rodape, W-ctx.measureText(rodape).width-20, H-20);
+  ctx.fillStyle='#f97316'; ctx.fillRect(0,H-36,W,36);
+  ctx.fillStyle='#ffffff'; ctx.font='bold 11px Arial';
+  ctx.fillText(nomeEmpresa+' · Sistema de Gestão',20,H-20);
+  ctx.fillStyle='rgba(255,255,255,0.75)'; ctx.font='10px Arial';
+  const rod='sistemaatualcenter-bit.github.io/construmax';
+  ctx.fillText(rod,W-ctx.measureText(rod).width-20,H-20);
 
-  // Download
   const link=document.createElement('a');
   link.download='relatorio-'+hojeStr+'.png';
   link.href=canvas.toDataURL('image/png');
   link.click();
   toast('✓ Relatório exportado como PNG!','#10b981');
 }
-
-// ═══════════════════════════════════════════════════════
-// COMANDA RÁPIDA
-// ═══════════════════════════════════════════════════════
-let cmdItens=[];
-let cmdDropIdx=-1;
-let cmdUltimoId=null;
 
 function renderComanda(){
   const tem=cmdItens.length>0;
@@ -11403,6 +11484,7 @@ window.auth.onAuthStateChanged(function(user){
             parceiros:   JSON.parse(m.parceiros||'[]'),
             boletos:     JSON.parse(m.boletos||'[]'),
             despesas:    JSON.parse(m.despesas||'[]'),
+            tarefas:     JSON.parse(m.tarefas||'[]'),
             fornecedores:JSON.parse(m.fornecedores||'[]'),
             entradas:    JSON.parse(m.entradas||'[]'),
             devolucoes:  JSON.parse(m.devolucoes||'[]'),
