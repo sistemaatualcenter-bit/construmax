@@ -2947,6 +2947,8 @@ function salvarCliRapido(){
   const id=uid();
   DB.clientes.push({id,nome,cpf:document.getElementById('cr-cpf').value,tel:document.getElementById('cr-tel').value,
     email:'',end:'',cidade:document.getElementById('cr-cidade').value,uf:'',obs:'',lim:0,dt:hj()});
+  const _newCliId=document.getElementById('mc-id')?.value||'';
+if(_newCliId){const _nc=DB.clientes.find(c=>c.id===_newCliId);if(_nc)salvarRegistro('clientes',_newCliId,_nc);}
   saveDB();
   // Seleciona o novo cliente no campo de busca
   selecionarCliDoc(id, nome);
@@ -3715,12 +3717,14 @@ function deletarDocAtual(){
   const d=DB.pedidos.find(x=>x.id===docIdSelecionado);
   if(d&&d.tipo==='ped'&&isAtivo(d))restaurarEstoque(d);
   DB.pedidos=DB.pedidos.filter(p=>p.id!==docIdSelecionado);
+  deletarRegistro('pedidos',docIdSelecionado);
   saveDB();closeMD('ver');renderPedidos();renderOrcamentos();toast('Excluído','#ef4444');
 }
 function mudaStatus(id,st){
   const d=DB.pedidos.find(x=>x.id===id);if(!d)return;
   const old=d.st;
-  if(d.tipo==='orc'){d.st=st;saveDB();renderOrcamentos();return;}
+  if(d.tipo==='orc'){d.st=st;if(d)salvarRegistro('pedidos',d.id,d);
+  saveDB();renderOrcamentos();return;}
   if(st==='cancelado'&&old!=='cancelado')restaurarEstoque(d);
   if(old==='cancelado'&&st!=='cancelado')baixarEstoque(d);
   d.st=st;
@@ -3821,6 +3825,7 @@ function salvarEntregaVer(id){
   const st=document.getElementById('mver-ent-st')?.value||'a-entregar';
   const obs=document.getElementById('mver-ent-obs')?.value?.trim()||'';
   d.entrega={dtPrevista:dt,end,st,obs,dtEntregue:'',parciais:[]};
+  if(d)salvarRegistro('pedidos',d.id,d);
   saveDB();renderEntregaVer(d);renderEntregas();renderPedidos();
   toast('✓ Entrega adicionada ao '+d.num,'#10b981');
 }
@@ -3855,6 +3860,7 @@ function salvarEdicaoEntregaVer(id){
   d.entrega.end=document.getElementById('mver-ent-end')?.value?.trim()||'';
   d.entrega.st=document.getElementById('mver-ent-st')?.value||'a-entregar';
   d.entrega.obs=document.getElementById('mver-ent-obs')?.value?.trim()||'';
+  if(d)salvarRegistro('pedidos',d.id,d);
   saveDB();renderEntregaVer(d);renderEntregas();
   toast('✓ Entrega atualizada','#10b981');
 }
@@ -3862,6 +3868,7 @@ function removerEntregaVer(id){
   if(!confirm('Remover entrega deste pedido?'))return;
   const d=DB.pedidos.find(x=>x.id===id);if(!d)return;
   delete d.entrega;
+  if(d)salvarRegistro('pedidos',d.id,d);
   saveDB();renderEntregaVer(d);renderEntregas();renderPedidos();
   toast('Entrega removida','#f59e0b');
 }
@@ -3904,6 +3911,7 @@ function abrirEditarDesconto(){
   d.descTipo=novoTipo;
   d.total=novoTotal;
   d.lucro=novoLucro;
+  if(d)salvarRegistro('pedidos',d.id,d);
   saveDB();
   verDoc(docIdSelecionado); // atualiza o modal
   renderPedidos();
@@ -4605,6 +4613,7 @@ function confirmarEntregaParcial(){
     const pct=Math.round(entregueQtd/totalQtd*100);
     toast('📦 Entrega parcial registrada — '+pct+'% entregue','#a78bfa');
   }
+  if(d)salvarRegistro('pedidos',d.id,d);
   saveDB();closeMD('entrega-parcial');renderEntregas();renderPedidos();
 }
 function confirmarEntrega(id){
@@ -4613,6 +4622,7 @@ function confirmarEntrega(id){
   d.entrega.st='entregue';
   d.entrega.dtEntregue=dtHtml();
   d.st='entregue';
+  if(d)salvarRegistro('pedidos',d.id,d);
   saveDB();renderEntregas();renderPedidos();toast('\u2713 Entrega confirmada!');
 }
 function imprimirRomaneio(){
@@ -5105,6 +5115,7 @@ function salvarAjuste(){
     if(tipo==='entrada')est+=qtd;else if(tipo==='saida')est=Math.max(0,est-qtd);else est=qtd;
     return{...p,est};
   });
+  const _pAdj=DB.produtos.find(p=>p.id===id);if(_pAdj)salvarRegistro('produtos',id,_pAdj);
   saveDB();closeMD('ajust');renderEstoque();toast('✓ Estoque ajustado');
 }
 
@@ -5386,9 +5397,12 @@ function salvarFornecedor(){
     prazo:parseInt(document.getElementById('mf-prazo').value)||30,obs:document.getElementById('mf-obs').value};
   if(id){DB.fornecedores=DB.fornecedores.map(f=>f.id===id?{...f,...obj}:f);toast('✓ Fornecedor atualizado');}
   else{DB.fornecedores.push({...obj,id:uid(),dt:hj()});toast('✓ Fornecedor cadastrado');}
+  const _fid=document.getElementById('mf-id').value||_newFid;
+const _fd=DB.fornecedores.find(f=>f.id===_fid);if(_fd)salvarRegistro('fornecedores',_fid,_fd);
   saveDB();closeMD('for');renderFornecedores();
 }
-function delFornecedor(id){if(!confirm('Remover?'))return;DB.fornecedores=DB.fornecedores.filter(f=>f.id!==id);saveDB();renderFornecedores();toast('Removido','#ef4444');}
+function delFornecedor(id){if(!confirm('Remover?'))return;DB.fornecedores=DB.fornecedores.filter(f=>f.id!==id);deletarRegistro('fornecedores',id);
+  saveDB();renderFornecedores();toast('Removido','#ef4444');}
 
 // ═══════════════════════════════════════════════════════
 // ═══════════════════════════════════════════════════════
@@ -5470,6 +5484,9 @@ function salvarParceiro(){
     DB.parceiros.push({...obj,id:uid(),dt:hj()});
     toast('✓ Parceiro cadastrado','#10b981');
   }
+  const _pid2=document.getElementById('mpar-id').value;
+const _pd=DB.parceiros.find(p=>p.id===(_pid2||''));
+if(_pd)salvarRegistro('parceiros',_pd.id,_pd);
   saveDB();closeMD('parceiro');renderParceiros();
 }
 function delParceiro(id){
@@ -5479,6 +5496,7 @@ function delParceiro(id){
   DB.parceiros=DB.parceiros.filter(p=>p.id!==id);
   // Remove vínculo dos clientes
   DB.clientes=DB.clientes.map(c=>({...c,indicadores:(c.indicadores||[]).filter(i=>i!==id)}));
+  deletarRegistro('parceiros',id);
   saveDB();renderParceiros();toast('Parceiro removido','#ef4444');
 }
 function limparFiltroPar(){
@@ -5585,6 +5603,7 @@ function confirmarPagComissao(){
     valorPago:valor,
     dt:hj()
   });
+  const _par2=DB.parceiros.find(p=>p.id===parid);if(_par2)salvarRegistro('parceiros',parid,_par2);
   saveDB();
   closeMD('com-pag');
   renderParceiros();
@@ -5849,11 +5868,15 @@ function salvarBoleto(){
     DB.boletos.push({...obj,id:uid(),dt:hj()});
     toast('✓ Boleto cadastrado');
   }
+  const _bid=document.getElementById('mb-id')?.value||'';
+const _bd=DB.boletos.find(b=>b.id===(_bid||''));
+if(_bd)salvarRegistro('boletos',_bd.id,_bd);
   saveDB();closeMD('boleto');renderContasPagar();
 }
 function delBoleto(id){
   if(!confirm('Remover este boleto?'))return;
   DB.boletos=DB.boletos.filter(b=>b.id!==id);
+  deletarRegistro('boletos',id);
   saveDB();renderContasPagar();toast('Boleto removido','#ef4444');
 }
 function abrirPagBoleto(id){
@@ -5882,6 +5905,7 @@ function confirmarPagBoleto(){
     if(b.id!==id)return b;
     return{...b,pago:true,dtPago:dt,valorPago:valor,obsPag:obs};
   });
+  const _bdp=DB.boletos.find(b=>b.id===id);if(_bdp)salvarRegistro('boletos',id,_bdp);
   saveDB();closeMD('boleto-pag');renderContasPagar();
   toast('✓ Pagamento registrado!','#10b981');
 }
@@ -7102,7 +7126,8 @@ function salvarEntrada(){
   nfItens=[];
   saveDB();closeMD('ent');renderEntradas();renderEstoque();
 }
-function delEntrada(id){if(!confirm('Remover?'))return;DB.entradas=DB.entradas.filter(e=>e.id!==id);saveDB();renderEntradas();toast('Removida','#ef4444');}
+function delEntrada(id){if(!confirm('Remover?'))return;DB.entradas=DB.entradas.filter(e=>e.id!==id);deletarRegistro('entradas',id);
+  saveDB();renderEntradas();toast('Removida','#ef4444');}
 
 // ═══════════════════════════════════════════════════════
 // FINANCEIRO
@@ -7426,6 +7451,9 @@ function salvarDespesa(){
       toast('✓ Despesa registrada');
     }
   }
+  const _did=document.getElementById('md-desp-id')?.value||'';
+const _dd=DB.despesas.find(d=>d.id===(_did||''));
+if(_dd)salvarRegistro('despesas',_dd.id,_dd);
   saveDB();closeMD('despesa');renderDespesas();
 }
 function gerarParcelasFixas(d){
@@ -7444,11 +7472,13 @@ function pagarDespesa(id){
     if(d.id!==id)return d;
     return{...d,pago:true,dtPago:dtHtml(),valorPago:d.valor};
   });
+  const _ddp=DB.despesas.find(d=>d.id===id);if(_ddp)salvarRegistro('despesas',id,_ddp);
   saveDB();renderDespesas();toast('✓ Despesa paga','#10b981');
 }
 function delDespesa(id){
   if(!confirm('Remover esta despesa?'))return;
   DB.despesas=DB.despesas.filter(function(d){return d.id!==id;});
+  deletarRegistro('despesas',id);
   saveDB();renderDespesas();toast('Despesa removida','#ef4444');
 }
 function renderDespesas(){
