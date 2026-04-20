@@ -1,31 +1,4 @@
-<!DOC
-  <!-- TAREFAS DA LOJA -->
-  <div class="card cp" id="dash-tarefas-card" style="margin-bottom:16px">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
-      <div class="stl" style="margin-bottom:0">📋 Tarefas</div>
-      <div style="display:flex;gap:6px;align-items:center">
-        <span id="dash-tarefas-badge" style="display:none;background:#ef4444;color:#fff;border-radius:10px;padding:1px 8px;font-size:11px;font-weight:700"></span>
-        <button class="btn bg bsm" onclick="abrirNovaTarefa()" style="font-size:12px">+ Nova</button>
-      </div>
-    </div>
-    <!-- Input rápido -->
-    <div id="dash-tarefa-input" style="display:none;margin-bottom:10px;display:flex;gap:6px">
-      <input class="inp" id="dash-tarefa-txt" placeholder="Descrever a tarefa..." style="flex:1" onkeydown="if(event.key==='Enter')salvarTarefa()">
-      <select class="inp" id="dash-tarefa-prio" style="width:100px">
-        <option value="normal">Normal</option>
-        <option value="urgente">🔴 Urgente</option>
-        <option value="baixa">🟡 Baixa</option>
-      </select>
-      <button class="btn bp bsm" onclick="salvarTarefa()">✓</button>
-      <button class="btn bg bsm" onclick="fecharNovaTarefa()">✕</button>
-    </div>
-    <div id="dash-tarefas-lista" style="display:flex;flex-direction:column;gap:6px">
-      <div style="color:var(--mt);font-size:13px;text-align:center;padding:16px 0">Nenhuma tarefa pendente ✓</div>
-    </div>
-  </div>
-
-TYPE html>
-<!-- CONSTRUMAX v8.9.1 -->
+<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
@@ -70,8 +43,6 @@ body{font-family:'Barlow',sans-serif;background:var(--bg);color:var(--tx);height
 .kg{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px}
 .kpi{background:var(--card);border:1px solid var(--br);border-radius:12px;padding:14px}
 .kv{font-family:'Barlow Condensed',sans-serif;font-size:26px;font-weight:800;line-height:1}
-.kv-blur{filter:blur(6px);user-select:none;transition:filter .2s}
-.val-blur{filter:blur(5px);user-select:none;transition:filter .2s}
 .kl{font-size:11.5px;color:var(--mt);font-weight:600;margin-top:4px}
 .ks{font-size:11px;color:var(--mt2);margin-top:2px}
 .two{display:grid;grid-template-columns:1fr 1fr;gap:14px}
@@ -98,9 +69,6 @@ select.inp option{background:var(--card2)}
 .ir:last-child{border-bottom:none}
 .bt{height:6px;background:var(--br2);border-radius:3px;overflow:hidden}
 .bf{height:100%;border-radius:3px;transition:width .4s}
-.cfg-cor{border-radius:7px;aspect-ratio:1;cursor:pointer;border:3px solid transparent;transition:all .15s}
-.cfg-cor:hover{transform:scale(1.1)}
-.cfg-cor.ativo{border-color:#fff;box-shadow:0 0 0 2px #888}
 .mo{display:none;position:fixed;inset:0;background:#000a;z-index:200;align-items:center;justify-content:center;padding:20px}
 .md{background:var(--card);border:1px solid var(--br);border-radius:14px;width:100%;max-height:90vh;overflow-y:auto;padding:20px}
 .mh{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid var(--br2)}
@@ -135,11 +103,6 @@ select.inp option{background:var(--card2)}
 .medal{font-size:16px;width:22px;text-align:center}
 @media(max-width:900px){.kg{grid-template-columns:1fr 1fr}.two{grid-template-columns:1fr}.fg{grid-template-columns:1fr}}
 </style>
-
-  <!-- Firebase SDKs -->
-  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
 </head>
 <body>
 
@@ -165,9 +128,6 @@ select.inp option{background:var(--card2)}
   <button class="nb" onclick="go('pedidos')" id="nav-pedidos">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>Pedidos
   </button>
-  <button class="nb" onclick="go('entregas')" id="nav-entregas">
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>Entregas
-  </button>
   <button class="nb" onclick="go('devolucoes')" id="nav-devolucoes">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.29"/></svg>Devoluções
   </button>
@@ -188,15 +148,6 @@ select.inp option{background:var(--card2)}
   <button class="nb" onclick="go('financeiro')" id="nav-financeiro">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>Financeiro
   </button>
-  <button class="nb" onclick="go('contas')" id="nav-contas">
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>Contas a Receber
-  </button>
-  <button class="nb" onclick="go('parceiros')" id="nav-parceiros">
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>Parceiros
-  </button>
-  <button class="nb" onclick="go('contaspagar')" id="nav-contaspagar">
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/><line x1="12" y1="14" x2="12" y2="18"/><line x1="10" y1="16" x2="14" y2="16"/></svg>Contas a Pagar
-  </button>
   <button class="nb" onclick="go('relatorios')" id="nav-relatorios">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>Relatórios
   </button>
@@ -215,10 +166,6 @@ select.inp option{background:var(--card2)}
       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
       <span id="ab-stock-txt">0 em falta</span>
     </div>
-    <div id="ab-boletos" class="ab" onclick="go('contaspagar')" style="display:none;background:#ef444420;border-color:#ef444460;color:#ef4444">
-      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>
-      <span id="ab-boletos-txt">0 boleto(s) vencido(s)</span>
-    </div>
   </div>
 </div>
 
@@ -228,45 +175,35 @@ select.inp option{background:var(--card2)}
 <div id="pg-dashboard" class="pg active">
   <div class="ph">
     <div><div class="pt">Dashboard</div><div style="font-size:11px;color:var(--mt);margin-top:2px" id="dash-date"></div></div>
-    <button class="btn bg bsm" onclick="gerarRelatorioDiaPNG()" title="Exportar relatório do dia como imagem" style="font-size:12px;padding:6px 12px">
-      📸 Relatório do Dia
-    </button>
-    <div class="ha">
-      <select class="inp" id="dash-tipo" onchange="renderDash()" style="width:155px">
-        <option value="">Todos docs</option>
-        <option value="orcamento">Orçamentos</option>
-        <option value="em-aberto">Em Aberto</option>
-        <option value="pago">Pago</option>
-        <option value="cancelado">Cancelado</option>
-      </select>
-      <select class="inp" id="dash-pag" onchange="renderDash()" style="width:130px">
-        <option value="">Todas formas</option>
-        <option value="pix">Pix</option>
-        <option value="dinheiro">Dinheiro</option>
-        <option value="cartao">Cartão</option>
-        <option value="prazo">A Prazo</option>
-        <option value="boleto">Boleto</option>
-        <option value="local">Receber Local</option>
-      </select>
-      <select class="inp" id="dash-modo" onchange="renderDash()" style="width:160px" title="Como exibir os valores">
-        <option value="total">Ver: Total das Vendas</option>
-        <option value="recebido">Ver: Apenas Recebido</option>
-      </select>
-      <div style="display:flex;border:1px solid var(--br);border-radius:8px;overflow:hidden" title="Incluir ou excluir vendas da categoria Grosseiro">
-        <button id="dash-cat-com" onclick="setCatFil('com')" style="padding:6px 10px;border:none;background:var(--or);color:#fff;cursor:pointer;font-weight:700;font-size:11.5px;font-family:inherit;transition:all .12s">COM Grosseiro</button>
-        <button id="dash-cat-sem" onclick="setCatFil('sem')" style="padding:6px 10px;border:none;background:var(--card2);color:var(--mt);cursor:pointer;font-weight:700;font-size:11.5px;font-family:inherit;transition:all .12s">SEM Grosseiro</button>
-      </div>
-      <div style="display:flex;align-items:center;gap:7px;background:var(--card);border:1px solid var(--br);border-radius:9px;padding:6px 11px">
-        <span style="color:var(--mt);font-size:11.5px">De:</span>
-        <input class="inp" id="dash-dt-ini" type="date" style="width:125px;padding:0;border:none;background:none;font-size:12px">
-        <span style="color:var(--mt);font-size:11.5px">Até:</span>
-        <input class="inp" id="dash-dt-fim" type="date" style="width:125px;padding:0;border:none;background:none;font-size:12px">
-      </div>
-      <button class="btn bp bsm" onclick="renderDash()">🔍 Filtrar</button>
-      <button class="btn bg bsm" onclick="dashClear()">✕</button>
+    <div style="display:flex;gap:8px;align-items:center">
+      <button class="btn bg bsm" onclick="gerarRelatorioDiaPNG()" title="Exportar relatório do dia como imagem" style="font-size:12px;padding:6px 12px">📸 Relatório do Dia</button>
+      <button id="btn-com" class="btn bsm" onclick="setCatFil('com')" style="font-size:11px">COM</button>
+      <button id="btn-sem" class="btn bg bsm" onclick="setCatFil('sem')" style="font-size:11px">SEM</button>
+      <button id="dash-modo-btn" class="btn bg bsm" onclick="toggleDashModo()" style="font-size:11px">Recebido</button>
       <button class="btn bg bsm" id="btn-ocultar-valores" onclick="toggleOcultarValores()" title="Ocultar/mostrar valores sensíveis" style="font-size:16px;padding:4px 10px">👁</button>
     </div>
   </div>
+  <!-- Filtros -->
+  <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
+    <input type="date" class="inp" id="dash-dt-ini" style="width:140px;font-size:12px" oninput="renderDash()">
+    <input type="date" class="inp" id="dash-dt-fim" style="width:140px;font-size:12px" oninput="renderDash()">
+    <select class="inp" id="dash-tipo" style="width:130px;font-size:12px" onchange="renderDash()">
+      <option value="">Todos os status</option>
+      <option value="pago">Pagos</option>
+      <option value="em-aberto">Em aberto</option>
+    </select>
+    <select class="inp" id="dash-pag" style="width:130px;font-size:12px" onchange="renderDash()">
+      <option value="">Todas as formas</option>
+      <option value="dinheiro">Dinheiro</option>
+      <option value="pix">Pix</option>
+      <option value="cartão crédito">Cartão Crédito</option>
+      <option value="cartão débito">Cartão Débito</option>
+      <option value="prazo">Prazo</option>
+      <option value="boleto">Boleto</option>
+    </select>
+    <button class="btn bg bsm" onclick="limparFiltrosDash()" style="font-size:11px">✕ Limpar</button>
+  </div>
+  <select id="dash-modo" style="display:none" onchange="renderDash()"><option value="total">total</option><option value="recebido">recebido</option></select>
   <div class="kg" id="dash-kpis"></div>
   <div class="two" style="margin-bottom:16px">
     <div class="card cp">
@@ -290,10 +227,10 @@ select.inp option{background:var(--card2)}
           <div class="stl" style="color:#fca5a5;margin-bottom:0">⚠ Estoque Crítico</div>
           <div style="display:flex;gap:7px;align-items:center">
             <button class="btn bg bsm" onclick="event.stopPropagation();impCrit()">🖨</button>
-            <span id="crit-arrow">▼</span>
+            <span id="crit-arrow" style="font-size:12px;color:var(--mt);transition:transform .2s">▼</span>
           </div>
         </div>
-        <div class="crit-body" id="crit-body"><div style="margin-top:10px" id="dash-low"></div></div>
+        <div id="crit-body"><div id="dash-low"></div></div>
       </div>
     </div>
   </div>
@@ -301,18 +238,18 @@ select.inp option{background:var(--card2)}
     <div class="card cp"><div class="stl">👑 Ranking Clientes</div><div id="dash-rank"></div></div>
     <div class="card cp">
       <div class="stl">📅 Vendas por Dia da Semana</div>
-      <div id="dash-chart-week" style="display:flex;align-items:flex-end;gap:6px;height:110px;padding-top:8px"></div>
+      <div id="dash-chart-week" style="padding:4px 0"></div>
     </div>
   </div>
-  <div class="card" style="margin-top:14px">
-    <div style="padding:10px 16px;border-bottom:1px solid var(--br2);display:flex;justify-content:space-between;align-items:center">
-      <div style="font-weight:700;font-size:13px">📄 Contas a Pagar</div>
+  <div class="card cp" style="margin-top:16px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+      <div class="stl" style="margin-bottom:0">📋 Contas a Pagar</div>
       <button class="btn bg bsm" onclick="go('contaspagar')" style="font-size:11px">Ver todas →</button>
     </div>
     <div id="dash-boletos"></div>
   </div>
   <!-- TAREFAS DA LOJA -->
-  <div class="card cp" style="margin-bottom:16px">
+  <div class="card cp" style="margin-bottom:16px;margin-top:16px">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
       <div class="stl" style="margin-bottom:0">📋 Tarefas</div>
       <div style="display:flex;gap:6px;align-items:center">
@@ -320,9 +257,9 @@ select.inp option{background:var(--card2)}
         <button class="btn bg bsm" onclick="abrirNovaTarefa()" style="font-size:12px">+ Nova</button>
       </div>
     </div>
-    <div id="dash-tarefa-input" style="display:none;gap:6px;margin-bottom:10px">
-      <input class="inp" id="dash-tarefa-txt" placeholder="Descrever a tarefa..." style="flex:1" onkeydown="if(event.key==='Enter')salvarTarefa()">
-      <div style="display:flex;gap:6px;margin-top:6px">
+    <div id="dash-tarefa-input" style="display:none;flex-direction:column;gap:6px;margin-bottom:10px">
+      <input class="inp" id="dash-tarefa-txt" placeholder="Descrever a tarefa..." onkeydown="if(event.key==='Enter')salvarTarefa()">
+      <div style="display:flex;gap:6px">
         <select class="inp" id="dash-tarefa-prio" style="flex:1">
           <option value="normal">Normal</option>
           <option value="urgente">🔴 Urgente</option>
