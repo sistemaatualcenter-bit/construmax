@@ -2911,13 +2911,24 @@ function salvarCliente(){
     obs:document.getElementById('mc-obs').value,lim:parseFloat(document.getElementById('mc-lim').value)||0,
     endEntrega:document.getElementById('mc-end-entrega').value,
     indicadores:getIndicadoresSelecionados()};
-  if(id){DB.clientes=DB.clientes.map(c=>c.id===id?{...c,...obj}:c);toast('✓ Cliente atualizado');}
-  else{DB.clientes.push({...obj,id:uid(),dt:hj()});toast('✓ Cliente cadastrado');}
+  let cliId=id;
+  if(id){
+    DB.clientes=DB.clientes.map(c=>c.id===id?{...c,...obj}:c);
+    toast('✓ Cliente atualizado');
+  } else {
+    cliId=uid();
+    DB.clientes.push({...obj,id:cliId,dt:hj()});
+    toast('✓ Cliente cadastrado');
+  }
+  // Salva registro individual no Firestore (evita sobrescrita de outros clientes)
+  const cliData=DB.clientes.find(c=>c.id===cliId);
+  if(cliData)salvarRegistro('clientes',cliId,cliData);
   saveDB();closeMD('cli');renderClientes();
 }
 function delCliente(id){
   if(!confirm('Remover cliente?'))return;
   DB.clientes=DB.clientes.filter(c=>c.id!==id);
+  deletarRegistro('clientes',id);
   saveDB();renderClientes();toast('Cliente removido','#ef4444');
 }
 function abrirCliRapido(){
@@ -3549,6 +3560,8 @@ function salvarDoc(){
     doc.num=numAtomico;
     DB.pedidos.push(doc);
     if(!isOrc)baixarEstoque(doc);
+    // Salva pedido individualmente no Firestore
+    salvarRegistro('pedidos',doc.id,doc);
     limparRascunho(tipo);
     saveDB();closeMD('doc');
     if(btnSalvar){btnSalvar.disabled=false;btnSalvar.textContent='Salvar';}
@@ -3682,11 +3695,13 @@ function registrarPagamento(){
   } else {
     toast('✓ '+fmt(valor)+' registrado. Devedor: '+fmt(docSaldo(d)));
   }
+  salvarRegistro('pedidos',d.id,d);
   saveDB();renderPagsModal(d);renderPedidos();
 }
 function delPagamento(id,idx){
   const d=DB.pedidos.find(x=>x.id===id);if(!d)return;
   d.pagamentos.splice(idx,1);
+  salvarRegistro('pedidos',d.id,d);
   saveDB();renderPagsModal(d);renderPedidos();toast('Pagamento removido','#ef4444');
 }
 function deletarDocAtual(){
@@ -4931,23 +4946,23 @@ function salvarProduto(){
   const preco=parseFloat(document.getElementById('mp-preco').value)||0;
   if(!preco){toast('⚠ Informe o preço','#f59e0b');return;}
   const id=document.getElementById('mp-id').value;
-  // Verifica nome duplicado (ignora o próprio produto em caso de edição)
   const nomeNorm=nome.toLowerCase().trim();
   const duplicado=DB.produtos.find(p=>p.nome.toLowerCase().trim()===nomeNorm&&p.id!==id);
-  if(duplicado){
-    toast('⚠ Já existe um produto com este nome: "'+duplicado.nome+'"','#ef4444');
-    return;
-  }
+  if(duplicado){toast('⚠ Já existe um produto com este nome: "'+duplicado.nome+'"','#ef4444');return;}
   const obj={nome,barras:document.getElementById('mp-barras').value,cod:document.getElementById('mp-cod').value,
     cat:document.getElementById('mp-cat').value,un:document.getElementById('mp-un').value||'un',
     forid:document.getElementById('mp-for').value,custo:parseFloat(document.getElementById('mp-custo').value)||0,
     preco,est:parseInt(document.getElementById('mp-est').value)||0,
     estMin:parseInt(document.getElementById('mp-estmin').value)||5,obs:document.getElementById('mp-obs').value};
+  let prodId=id;
   if(id){DB.produtos=DB.produtos.map(p=>p.id===id?{...p,...obj}:p);toast('✓ Produto atualizado');}
-  else{DB.produtos.push({...obj,id:uid()});toast('✓ Produto cadastrado');}
+  else{prodId=uid();DB.produtos.push({...obj,id:prodId});toast('✓ Produto cadastrado');}
+  // Salva registro individual no Firestore
+  const prodData=DB.produtos.find(p=>p.id===prodId);
+  if(prodData)salvarRegistro('produtos',prodId,prodData);
   saveDB();closeMD('prd');renderProdutos();
 }
-function delProduto(id){if(!confirm('Remover produto?'))return;DB.produtos=DB.produtos.filter(p=>p.id!==id);saveDB();renderProdutos();toast('Removido','#ef4444');}
+function delProduto(id){if(!confirm('Remover produto?'))return;DB.produtos=DB.produtos.filter(p=>p.id!==id);deletarRegistro('produtos',id);saveDB();renderProdutos();toast('Removido','#ef4444');}
 
 // ═══════════════════════════════════════════════════════
 // ESTOQUE
@@ -10518,6 +10533,37 @@ firebase.initializeApp(firebaseConfig);
 window.auth = firebase.auth();
 window.db   = firebase.firestore();
 
+
+// ═══════════════════════════════════════════════════════
+// SALVAMENTO GRANULAR — evita sobrescrita entre dispositivos
+// Salva apenas o registro modificado, não o banco inteiro
+// ═══════════════════════════════════════════════════════
+function salvarRegistro(colecao, id, dados){
+  if(!window.db||!window.currentUser)return;
+  const uid=window.currentUser.uid;
+  const ref=window.db.collection('lojas').doc(uid).collection(colecao).doc(id);
+  ref.set({...dados, _ts:Date.now(), _upd:new Date().toISOString()}, {merge:true})
+    .catch(function(e){console.warn('Erro salvar '+colecao+'/'+id+':',e);});
+}
+
+function deletarRegistro(colecao, id){
+  if(!window.db||!window.currentUser)return;
+  const uid=window.currentUser.uid;
+  window.db.collection('lojas').doc(uid).collection(colecao).doc(id)
+    .delete()
+    .catch(function(e){console.warn('Erro deletar '+colecao+'/'+id+':',e);});
+}
+
+function carregarColecaoGranular(colecao, cb){
+  if(!window.db||!window.currentUser){cb([]);return;}
+  const uid=window.currentUser.uid;
+  window.db.collection('lojas').doc(uid).collection(colecao)
+    .get()
+    .then(function(snap){
+      cb(snap.docs.map(function(d){return{...d.data(),_firestoreId:d.id};}));
+    })
+    .catch(function(){cb([]);});
+}
 
 // ═══════════════════════════════════════════════════════
 // CONTADOR ATÔMICO DE PEDIDOS — evita duplicidade multi-dispositivo
