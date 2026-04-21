@@ -7020,18 +7020,24 @@ function editarEntrada(id){
 let dropIdxEnt=-1;
 function filtProdEnt(){
   dropIdxEnt=-1;
-  const q=document.getElementById('me-prd-src').value.toLowerCase();
+  const q=document.getElementById('me-prd-src').value.trim();
+  const ql=q.toLowerCase();
   const drop=document.getElementById('me-prd-drop');
   if(!q){drop.style.display='none';return;}
-  // Auto-seleciona se código de barras exato digitado
-  const exactBarras=DB.produtos.find(p=>(p.barras||'').toLowerCase()===q.toLowerCase()&&q.length>=6);
-  if(exactBarras){selProdEnt(exactBarras.id);drop.style.display='none';toast('✓ '+exactBarras.nome,'#10b981');return;}
-  // Permite "NOVO" para cadastrar produto novo direto
-  const todosPrd=DB.produtos.filter(p=>p.nome.toLowerCase().includes(q)||(p.barras||'').includes(q));
+  // Código de barras: exige match EXATO para evitar produto errado
+  const pareceBarras=/^\d{8,}$/.test(q);
+  if(pareceBarras){
+    const exato=DB.produtos.find(p=>(p.barras||'')===q);
+    if(exato){selProdEnt(exato.id);drop.style.display='none';toast('✓ '+exato.nome,'#10b981');return;}
+    drop.style.display='none';
+    return;
+  }
+  // Busca por nome (não barras parcial)
+  const todosPrd=DB.produtos.filter(p=>p.nome.toLowerCase().includes(ql)||(p.cod||'').toLowerCase().includes(ql));
   const res=todosPrd.slice(0,50);
   drop.style.display='block';
   let html='';
-  if(res.length===0||q.length>2){
+  if(res.length===0||ql.length>2){
     html+=`<div data-pid="__novo__" data-idx="0" class="drop-item-ent" style="padding:8px 11px;cursor:pointer;font-size:12.5px;border-bottom:1px solid var(--br2);color:var(--or);font-weight:700">
       ➕ Cadastrar como novo produto: "<span style="font-style:italic">${document.getElementById('me-prd-src').value}</span>"
     </div>`;
@@ -7051,6 +7057,7 @@ function filtProdEnt(){
     }
   });
 }
+
 function hilightDropEnt(drop){
   drop.querySelectorAll('.drop-item-ent').forEach((el,i)=>{
     el.style.background=i===dropIdxEnt?'var(--br2)':'';
@@ -11079,21 +11086,32 @@ function onPagComanda(){
 
 function filtProdComanda(){
   cmdDropIdx=-1;
-  const q=document.getElementById('cmd-prd-src').value.toLowerCase().trim();
+  const q=document.getElementById('cmd-prd-src').value.trim();
+  const ql=q.toLowerCase();
   const drop=document.getElementById('cmd-prd-drop');
   if(!q){drop.style.display='none';return;}
-  const exact=DB.produtos.find(p=>(p.barras||'').toLowerCase()===q&&q.length>=6);
-  if(exact){selecionarProdComanda(exact.id);return;}
-  const res=DB.produtos.filter(p=>p.nome.toLowerCase().includes(q)||(p.barras||'').includes(q)||(p.cod||'').toLowerCase().includes(q)).slice(0,30);
+  // Se parece com código de barras (≥8 dígitos numéricos), exige match EXATO
+  // Evita selecionar produto errado enquanto o leitor ainda está digitando
+  const pareceBarras=/^\d{8,}$/.test(q);
+  if(pareceBarras){
+    const exato=DB.produtos.find(p=>(p.barras||'')===q);
+    if(exato){selecionarProdComanda(exato.id);drop.style.display='none';return;}
+    drop.style.display='none';
+    return;
+  }
+  // Busca por nome ou código (não barras parcial)
+  const res=DB.produtos.filter(p=>
+    p.nome.toLowerCase().includes(ql)||
+    (p.cod||'').toLowerCase().includes(ql)
+  ).slice(0,30);
   if(!res.length){drop.style.display='none';return;}
   drop.style.display='block';
   drop.innerHTML=res.map((p,i)=>`<div data-pid="${p.id}" data-idx="${i}" style="padding:9px 13px;cursor:pointer;font-size:13px;border-bottom:1px solid var(--br2)">
     <div style="font-weight:600">${p.nome}</div>
     <div style="font-size:11px;color:var(--mt)">${fmt(p.preco)} · Est: <strong style="color:${p.est<=p.estMin?'#fca5a5':'var(--gn)'}">${p.est}</strong> ${p.un}</div>
   </div>`).join('');
-  // Posicionamento automático via position:absolute no container
   drop.querySelectorAll('[data-pid]').forEach(el=>{
-    el.addEventListener('click',()=>{selecionarProdComanda(el.dataset.pid);});
+    el.addEventListener('click',()=>{selecionarProdComanda(el.dataset.pid);drop.style.display='none';});
     el.addEventListener('mouseenter',()=>{
       cmdDropIdx=parseInt(el.dataset.idx);
       drop.querySelectorAll('[data-pid]').forEach((e,i)=>e.style.background=i===cmdDropIdx?'var(--br2)':'');
@@ -11152,15 +11170,27 @@ function navDropComanda(e){
   }
   if(e.key==='Enter'){
     e.preventDefault();
+    const q=document.getElementById('cmd-prd-src').value.trim();
+    // Se parece com código de barras (≥8 dígitos numéricos), exige match EXATO
+    // Isso evita que o scanner selecione produto errado por match parcial
+    const pareceBarras=/^\d{8,}$/.test(q);
+    if(pareceBarras){
+      const exato=DB.produtos.find(p=>(p.barras||'')===q);
+      if(exato){selecionarProdComanda(exato.id);}
+      else{
+        drop.style.display='none';
+        toast('⚠ Código '+q+' não encontrado no cadastro','#f59e0b');
+      }
+      return;
+    }
     if(items.length>0){
-      // Seleciona o destacado ou o primeiro — vai para campo de qtd
+      // Texto normal — seleciona o destacado ou o primeiro
       const idx=cmdDropIdx>=0?cmdDropIdx:0;
       if(items[idx])selecionarProdComanda(items[idx].dataset.pid);
     } else {
-      // Sem dropdown aberto — tenta selecionar pelo nome e ir para qtd
-      const q=document.getElementById('cmd-prd-src').value.toLowerCase().trim();
-      if(!q)return;
-      const p=DB.produtos.find(x=>x.nome.toLowerCase()===q||(x.barras||'').toLowerCase()===q);
+      // Sem dropdown — tenta nome exato
+      const ql=q.toLowerCase();
+      const p=DB.produtos.find(x=>x.nome.toLowerCase()===ql||(x.barras||'').toLowerCase()===ql);
       if(p)selecionarProdComanda(p.id);
       else toast('⚠ Produto não encontrado — use as setas para selecionar','#f59e0b');
     }
