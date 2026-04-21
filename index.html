@@ -102,6 +102,17 @@ select.inp option{background:var(--card2)}
 .rank-row:last-child{border-bottom:none}
 .medal{font-size:16px;width:22px;text-align:center}
 @media(max-width:900px){.kg{grid-template-columns:1fr 1fr}.two{grid-template-columns:1fr}.fg{grid-template-columns:1fr}}
+
+/* ── Ocultar valores sensíveis ── */
+.kv-blur,.val-blur{
+  filter:blur(6px);
+  transition:filter .2s;
+  user-select:none;
+  cursor:pointer;
+}
+.kv-blur:hover,.val-blur:hover{
+  filter:blur(0);
+}
 </style>
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
@@ -183,6 +194,10 @@ select.inp option{background:var(--card2)}
     <div id="ab-stock" class="ab" onclick="go('estoque')" style="display:none">
       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
       <span id="ab-stock-txt">0 em falta</span>
+    </div>
+    <div id="ab-boletos" class="ab" onclick="go('contaspagar')" style="display:none;background:#ef444420;border-color:#ef444460;color:#ef4444">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>
+      <span id="ab-boletos-txt">0 boleto(s) vencido(s)</span>
     </div>
   </div>
 </div>
@@ -10574,16 +10589,15 @@ window.addEventListener('resize',()=>{
 });
 
 // ── Atalhos de teclado ──
-document.addEventListener('keydown',function(e){
+window.addEventListener('keydown',function(e){
   // Ignora se estiver digitando em algum campo de qualquer tipo
   const el=document.activeElement;
   const tag=el?.tagName?.toUpperCase();
   if(tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT'||el?.isContentEditable)return;
 
-  // Verifica se modal overlay está visível — usa getComputedStyle para pegar CSS padrão
+  // Verifica se modal overlay está visível
   const mo=document.getElementById('mo');
-  const moDisplay=mo?window.getComputedStyle(mo).display:'none';
-  const moAberto=moDisplay!=='none';
+  const moAberto=mo&&(mo.style.display==='flex'||mo.style.display==='block');
 
   // Esc: fecha modal aberto (exceto pedido/entrada em edição)
   if(e.key==='Escape'){
