@@ -2260,9 +2260,7 @@ function saveDB(){
   localStorage.setItem(KEY, dados);
   localStorage.setItem(KEY+'_ts', String(ts));
   showSI();
-  _pendingSave=true; // Marca que temos dados não enviados para nuvem
-  if(_nuvemTimer)clearTimeout(_nuvemTimer);
-  _nuvemTimer=setTimeout(function(){salvarNaNuvem(ts);_pendingSave=false;},1500);
+  salvarNaNuvem(ts);
 }
 
 function salvarNaNuvem(ts){
@@ -2299,10 +2297,8 @@ function salvarNaNuvem(ts){
     col.doc('pedidos2').set({ts:timestamp,pedidos:JSON.stringify(peds.slice(meio))}),
   ]).then(function(){
     _ultimoTsNuvem=timestamp; // Marca nosso próprio save para evitar re-sync
-    _pendingSave=false;
   }).catch(function(e){
     console.warn('Erro salvar nuvem:',e);
-    _pendingSave=false; // Libera flag mesmo em caso de erro
   });
 }
 function showSI(){const e=document.getElementById('si');e.classList.add('show');setTimeout(()=>e.classList.remove('show'),1400);}
@@ -2520,8 +2516,7 @@ function toggleCrit(){
   document.getElementById('crit-arrow').textContent=critOpen?'\u25BC':'\u25B6';
 }
 let _valoresOcultos=false;
-let _nuvemTimer=null; // debounce para salvarNaNuvem
-let _pendingSave=false; // flag: há dados locais ainda não enviados
+let _pendingSave=false; // flag: evita que listener sobrescreva dados locais não salvos
 function toggleOcultarValores(){
   _valoresOcultos=!_valoresOcultos;
   const btn=document.getElementById('btn-ocultar-valores');
@@ -11464,11 +11459,9 @@ function iniciarListenerSync(){
     const tsNuvem=doc.data().ts||0;
     // Ignora se não mudou desde último sync conhecido
     if(tsNuvem<=_ultimoTsNuvem)return;
-    // Ignora se temos dados locais não enviados ainda (evita sobrescrever com stale)
-    if(_pendingSave)return;
     const tsLocal=parseInt(localStorage.getItem(KEY+'_ts')||'0');
-    // Ignora se a mudança veio de nós mesmos (ts coincide com o que salvamos)
-    if(tsLocal>0&&Math.abs(tsNuvem-tsLocal)<5000)return;
+    // Ignora se a mudança veio de nós mesmos (ts idêntico ao que salvamos)
+    if(tsLocal>0&&tsNuvem===tsLocal)return;
     _ultimoTsNuvem=tsNuvem;
     // Puxa dados atualizados da nuvem silenciosamente
     const col=window.db.collection('lojas').doc(uid).collection('d');
