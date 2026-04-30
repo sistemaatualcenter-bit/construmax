@@ -2921,7 +2921,7 @@ function renderDash(){
   }).join('');
   // Mantém blur se estava ativo
   setTimeout(aplicarBlurValores,0);
-  renderTarefas();
+  if(typeof renderTarefas==='function') renderTarefas();
 }
 function impCrit(){
   const low=DB.produtos.filter(p=>p.est<=p.estMin);
@@ -10605,7 +10605,7 @@ function pararScan(){
 // INIT — controlado pelo Firebase Auth (ver firebase_init abaixo)
 // ═══════════════════════════════════════════════════════
 // loadDB() e go('dashboard') são chamados por initApp() após login
-setCatFil('com'); // inicializa labels dos botões COM/SEM com nome da categoria
+// setCatFil chamado pelo initApp após login (não aqui - evita renderDash antes do script 5 carregar)
 
 // Fecha dropdowns de busca ao clicar fora
 document.addEventListener('click',function(e){
@@ -11541,6 +11541,7 @@ function initApp(){
       if(Object.keys(upd).length>0)ref.set(upd,{merge:true});
     }).catch(function(){});
   }
+  setCatFil('com'); // inicializa labels dos botões COM/SEM
   go('dashboard');
   const sbFoot=document.querySelector('.sb-foot');
   if(sbFoot&&!document.getElementById('btn-logout')){
