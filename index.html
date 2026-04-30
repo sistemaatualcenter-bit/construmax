@@ -2255,13 +2255,17 @@ function loadDB(){
   if(!DB.clientes||!DB.clientes.length)semente();
 }
 function saveDB(){
-  const dados = JSON.stringify(DB);
   const ts = Date.now();
-  localStorage.setItem(KEY, dados);
   localStorage.setItem(KEY+'_ts', String(ts));
   _firebaseSavePending=true;
-  showSI('pending'); // Mostra "Salvando..." enquanto Firebase não confirmou
-  salvarNaNuvem(ts);
+  showSI('pending');
+  // Adia o stringify pesado para depois do frame atual renderizar
+  // Evita travamento visual da UI em bancos grandes (2-3MB)
+  requestAnimationFrame(function(){
+    const dados = JSON.stringify(DB);
+    localStorage.setItem(KEY, dados);
+    salvarNaNuvem(ts);
+  });
 }
 
 function salvarNaNuvem(ts){
@@ -11342,25 +11346,12 @@ function finalizarComanda(){
   setTimeout(function(){
     if(suc)suc.style.display='none';
     document.getElementById('cmd-btn-imprimir').style.display='none';
-  },4000);
+  },2000);
 
   // Salva localmente + Firebase via debounce (1.5s)
   saveDB();
   salvarRegistro('pedidos',doc.id,doc);
   // Não cancela o debounce - deixa salvarNaNuvem usar o ts correto do saveDB
-
-  // Atualiza contador atômico no Firebase em background
-  if(window.db&&window.currentUser){
-    const ref=window.db.collection('lojas').doc(window.currentUser.uid);
-    window.db.runTransaction(function(tx){
-      return tx.get(ref).then(function(d){
-        const cloud=d.exists&&d.data().seq_ped?d.data().seq_ped:0;
-        const proximo=Math.max(numLocal,cloud);
-        tx.set(ref,{seq_ped:proximo},{merge:true});
-        return proximo;
-      });
-    }).catch(function(e){console.warn('seq_ped sync erro:',e);});
-  }
 }
 
 
