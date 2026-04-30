@@ -2260,17 +2260,16 @@ function saveDB(){
   localStorage.setItem(KEY, dados);
   localStorage.setItem(KEY+'_ts', String(ts));
   showSI();
-  // Debounce: aguarda 1.5s antes de subir para nuvem
-  // Evita múltiplos writes seguidos (ex: comanda adiciona item, salva estoque, salva pedido)
+  _pendingSave=true; // Marca que temos dados não enviados para nuvem
   if(_nuvemTimer)clearTimeout(_nuvemTimer);
-  _nuvemTimer=setTimeout(function(){salvarNaNuvem();},1500);
+  _nuvemTimer=setTimeout(function(){salvarNaNuvem(ts);_pendingSave=false;},1500);
 }
 
 function salvarNaNuvem(ts){
   if(!window.db || !window.currentUser) return;
   // Sempre salva quando chamada (debounce no saveDB já evita chamadas excessivas)
   const uid = window.currentUser.uid;
-  const timestamp = ts || Date.now();
+  const timestamp = ts || parseInt(localStorage.getItem(KEY+'_ts')||'0') || Date.now();
   const updatedAt = new Date().toISOString();
   const peds = DB.pedidos||[];
   const meio = Math.ceil(peds.length/2);
@@ -2300,7 +2299,11 @@ function salvarNaNuvem(ts){
     col.doc('pedidos2').set({ts:timestamp,pedidos:JSON.stringify(peds.slice(meio))}),
   ]).then(function(){
     _ultimoTsNuvem=timestamp; // Marca nosso próprio save para evitar re-sync
-  }).catch(function(e){console.warn('Erro salvar nuvem:',e);});
+    _pendingSave=false;
+  }).catch(function(e){
+    console.warn('Erro salvar nuvem:',e);
+    _pendingSave=false; // Libera flag mesmo em caso de erro
+  });
 }
 function showSI(){const e=document.getElementById('si');e.classList.add('show');setTimeout(()=>e.classList.remove('show'),1400);}
 function semente(){
@@ -2518,6 +2521,7 @@ function toggleCrit(){
 }
 let _valoresOcultos=false;
 let _nuvemTimer=null; // debounce para salvarNaNuvem
+let _pendingSave=false; // flag: há dados locais ainda não enviados
 function toggleOcultarValores(){
   _valoresOcultos=!_valoresOcultos;
   const btn=document.getElementById('btn-ocultar-valores');
@@ -11326,12 +11330,10 @@ function finalizarComanda(){
     document.getElementById('cmd-btn-imprimir').style.display='none';
   },4000);
 
-  // Salva localmente imediato + Firebase em background
+  // Salva localmente + Firebase via debounce (1.5s)
   saveDB();
   salvarRegistro('pedidos',doc.id,doc);
-  // Força upload bulk imediato para sync entre dispositivos (sem debounce)
-  if(_nuvemTimer){clearTimeout(_nuvemTimer);_nuvemTimer=null;}
-  setTimeout(function(){salvarNaNuvem();},200);
+  // Não cancela o debounce - deixa salvarNaNuvem usar o ts correto do saveDB
 
   // Atualiza contador atômico no Firebase em background
   if(window.db&&window.currentUser){
@@ -11460,13 +11462,15 @@ function iniciarListenerSync(){
   _syncListener=metaRef.onSnapshot(function(doc){
     if(!doc.exists)return;
     const tsNuvem=doc.data().ts||0;
-    // Só sincroniza se a versão da nuvem for mais recente que a local
+    // Ignora se não mudou desde último sync conhecido
     if(tsNuvem<=_ultimoTsNuvem)return;
+    // Ignora se temos dados locais não enviados ainda (evita sobrescrever com stale)
+    if(_pendingSave)return;
     const tsLocal=parseInt(localStorage.getItem(KEY+'_ts')||'0');
-    // Evita sobrescrever se fomos nós que salvamos (diferença < 3s)
-    if(tsNuvem-tsLocal<3000&&tsLocal>0)return;
+    // Ignora se a mudança veio de nós mesmos (ts coincide com o que salvamos)
+    if(tsLocal>0&&Math.abs(tsNuvem-tsLocal)<5000)return;
     _ultimoTsNuvem=tsNuvem;
-    // Puxa pedidos atualizados da nuvem silenciosamente
+    // Puxa dados atualizados da nuvem silenciosamente
     const col=window.db.collection('lojas').doc(uid).collection('d');
     Promise.all([col.doc('pedidos1').get(),col.doc('pedidos2').get()])
       .then(function(results){
@@ -11474,17 +11478,18 @@ function iniciarListenerSync(){
           const p1=results[0].exists?JSON.parse(results[0].data().pedidos||'[]'):[];
           const p2=results[1].exists?JSON.parse(results[1].data().pedidos||'[]'):[];
           const pedidosNuvem=[...p1,...p2];
-          if(pedidosNuvem.length<DB.pedidos.length-5)return; // proteção anti-perda
+          // NUNCA sobrescreve se a nuvem tiver MENOS pedidos que o local
+          if(pedidosNuvem.length<DB.pedidos.length)return;
           DB.pedidos=pedidosNuvem;
           // Atualiza clientes também
           const metaData=doc.data();
           if(metaData.clientes)DB.clientes=JSON.parse(metaData.clientes);
           localStorage.setItem(KEY,JSON.stringify(DB));
-          // Re-renderiza a página atual se for dashboard ou pedidos
+          // Re-renderiza a página atual
           if(curPg==='dashboard')renderDash();
           else if(curPg==='pedidos')renderPedidos();
           else if(curPg==='orcamentos')renderOrcamentos();
-          console.log('[SYNC] Dados atualizados da nuvem: '+pedidosNuvem.length+' pedidos');
+          console.log('[SYNC] '+pedidosNuvem.length+' pedidos recebidos do outro dispositivo');
         }catch(e){console.warn('[SYNC] Erro ao processar:',e);}
       });
   },function(e){console.warn('[SYNC] Listener erro:',e);});
