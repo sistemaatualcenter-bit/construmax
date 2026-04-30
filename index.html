@@ -2263,16 +2263,12 @@ function saveDB(){
   // Debounce: aguarda 1.5s antes de subir para nuvem
   // Evita múltiplos writes seguidos (ex: comanda adiciona item, salva estoque, salva pedido)
   if(_nuvemTimer)clearTimeout(_nuvemTimer);
-  _nuvemTimer=setTimeout(function(){salvarNaNuvem(ts);},1500);
+  _nuvemTimer=setTimeout(function(){salvarNaNuvem();},1500);
 }
 
-let _ultimoHashNuvem='';
 function salvarNaNuvem(ts){
   if(!window.db || !window.currentUser) return;
-  // Skip if data hasn't changed since last cloud save
-  const hashAtual=String(DB.pedidos.length)+String(DB.produtos.length)+String(ts||0);
-  if(hashAtual===_ultimoHashNuvem)return;
-  _ultimoHashNuvem=hashAtual;
+  // Sempre salva quando chamada (debounce no saveDB já evita chamadas excessivas)
   const uid = window.currentUser.uid;
   const timestamp = ts || Date.now();
   const updatedAt = new Date().toISOString();
@@ -2302,7 +2298,9 @@ function salvarNaNuvem(ts){
     col.doc('produtos').set({ts:timestamp,produtos:JSON.stringify(DB.produtos||[])}),
     col.doc('pedidos1').set({ts:timestamp,pedidos:JSON.stringify(peds.slice(0,meio))}),
     col.doc('pedidos2').set({ts:timestamp,pedidos:JSON.stringify(peds.slice(meio))}),
-  ]).catch(function(e){console.warn('Erro salvar nuvem:',e);});
+  ]).then(function(){
+    _ultimoTsNuvem=timestamp; // Marca nosso próprio save para evitar re-sync
+  }).catch(function(e){console.warn('Erro salvar nuvem:',e);});
 }
 function showSI(){const e=document.getElementById('si');e.classList.add('show');setTimeout(()=>e.classList.remove('show'),1400);}
 function semente(){
@@ -11328,9 +11326,12 @@ function finalizarComanda(){
     document.getElementById('cmd-btn-imprimir').style.display='none';
   },4000);
 
-  // Salva no Firebase em background (não bloqueia UI)
+  // Salva localmente imediato + Firebase em background
   saveDB();
   salvarRegistro('pedidos',doc.id,doc);
+  // Força upload bulk imediato para sync entre dispositivos (sem debounce)
+  if(_nuvemTimer){clearTimeout(_nuvemTimer);_nuvemTimer=null;}
+  setTimeout(function(){salvarNaNuvem();},200);
 
   // Atualiza contador atômico no Firebase em background
   if(window.db&&window.currentUser){
@@ -11446,8 +11447,52 @@ function sincronizarNuvem(){
   }).catch(function(e){toast('⚠ Erro de conexão: '+e.message,'#ef4444');});
 }
 
+
+// ── Listener em tempo real para sync entre dispositivos ──
+let _syncListener=null;
+let _ultimoTsNuvem=0;
+
+function iniciarListenerSync(){
+  if(!window.db||!window.currentUser)return;
+  if(_syncListener)_syncListener(); // cancela listener anterior
+  const uid=window.currentUser.uid;
+  const metaRef=window.db.collection('lojas').doc(uid).collection('d').doc('meta');
+  _syncListener=metaRef.onSnapshot(function(doc){
+    if(!doc.exists)return;
+    const tsNuvem=doc.data().ts||0;
+    // Só sincroniza se a versão da nuvem for mais recente que a local
+    if(tsNuvem<=_ultimoTsNuvem)return;
+    const tsLocal=parseInt(localStorage.getItem(KEY+'_ts')||'0');
+    // Evita sobrescrever se fomos nós que salvamos (diferença < 3s)
+    if(tsNuvem-tsLocal<3000&&tsLocal>0)return;
+    _ultimoTsNuvem=tsNuvem;
+    // Puxa pedidos atualizados da nuvem silenciosamente
+    const col=window.db.collection('lojas').doc(uid).collection('d');
+    Promise.all([col.doc('pedidos1').get(),col.doc('pedidos2').get()])
+      .then(function(results){
+        try{
+          const p1=results[0].exists?JSON.parse(results[0].data().pedidos||'[]'):[];
+          const p2=results[1].exists?JSON.parse(results[1].data().pedidos||'[]'):[];
+          const pedidosNuvem=[...p1,...p2];
+          if(pedidosNuvem.length<DB.pedidos.length-5)return; // proteção anti-perda
+          DB.pedidos=pedidosNuvem;
+          // Atualiza clientes também
+          const metaData=doc.data();
+          if(metaData.clientes)DB.clientes=JSON.parse(metaData.clientes);
+          localStorage.setItem(KEY,JSON.stringify(DB));
+          // Re-renderiza a página atual se for dashboard ou pedidos
+          if(curPg==='dashboard')renderDash();
+          else if(curPg==='pedidos')renderPedidos();
+          else if(curPg==='orcamentos')renderOrcamentos();
+          console.log('[SYNC] Dados atualizados da nuvem: '+pedidosNuvem.length+' pedidos');
+        }catch(e){console.warn('[SYNC] Erro ao processar:',e);}
+      });
+  },function(e){console.warn('[SYNC] Listener erro:',e);});
+}
+
 function initApp(){
   loadDB();
+  iniciarListenerSync(); // Listener em tempo real para sync entre dispositivos
   // Inicializa contadores atômicos no Firebase com valores locais (se ainda não existirem)
   if(window.db&&window.currentUser){
     const ref=window.db.collection('lojas').doc(window.currentUser.uid);
