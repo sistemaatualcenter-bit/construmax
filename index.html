@@ -2291,23 +2291,22 @@ function salvarNaNuvem(ts){
     totalPedidos:peds.length,
   };
   const col = window.db.collection('lojas').doc(uid).collection('d');
-  // Salva pedidos primeiro (mais críticos), depois meta e produtos em paralelo
+  // Salva todos os 4 documentos em paralelo
+  console.log('[FIREBASE] Iniciando save: '+peds.length+' pedidos, ts='+timestamp);
   Promise.all([
+    col.doc('meta').set(meta),
+    col.doc('produtos').set({ts:timestamp,produtos:JSON.stringify(DB.produtos||[])}),
     col.doc('pedidos1').set({ts:timestamp,pedidos:JSON.stringify(peds.slice(0,meio))}),
     col.doc('pedidos2').set({ts:timestamp,pedidos:JSON.stringify(peds.slice(meio))}),
   ]).then(function(){
-    // Pedidos salvos — confirma visualmente e salva o resto em background
+    console.log('[FIREBASE] ✓ Salvo com sucesso: '+peds.length+' pedidos');
     _ultimoTsNuvem=timestamp;
     _firebaseSavePending=false;
     showSI('saved');
-    // Meta e produtos em background (não críticos para o pedido atual)
-    col.doc('meta').set(meta).catch(function(e){console.warn('meta save erro:',e);});
-    col.doc('produtos').set({ts:timestamp,produtos:JSON.stringify(DB.produtos||[])}).catch(function(e){console.warn('produtos save erro:',e);});
   }).catch(function(e){
-    console.warn('Erro salvar nuvem:',e);
+    console.error('[FIREBASE] ✗ ERRO ao salvar:', e.code, e.message);
     _firebaseSavePending=false;
     showSI('saved');
-    // Tenta novamente em 3s
     setTimeout(function(){salvarNaNuvem(ts);},3000);
   });
 }
@@ -11604,6 +11603,10 @@ window.auth.onAuthStateChanged(function(user){
       const tsLocal    = parseInt(localStorage.getItem(KEY+'_ts')||'0');
       const localRaw   = localStorage.getItem(KEY);
       const localDB    = localRaw ? (function(){try{return JSON.parse(localRaw);}catch(e){return null;}})() : null;
+      const localPeds  = localDB ? (localDB.pedidos||[]).length : 0;
+      const fbPeds1    = ped1Doc.exists ? JSON.parse(ped1Doc.data().pedidos||'[]').length : 0;
+      const fbPeds2    = ped2Doc.exists ? JSON.parse(ped2Doc.data().pedidos||'[]').length : 0;
+      console.log('[LOAD] tsFirebase='+tsFirebase+' tsLocal='+tsLocal+' localPeds='+localPeds+' fbPeds='+(fbPeds1+fbPeds2));
 
       // Usa o mais recente: localStorage ou Firebase
       // Protege contra reload antes do Firebase receber os dados
