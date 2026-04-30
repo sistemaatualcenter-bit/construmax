@@ -11600,8 +11600,15 @@ window.auth.onAuthStateChanged(function(user){
       col.doc('pedidos2').get(),
     ]).then(function(docs){
       const metaDoc=docs[0],prodDoc=docs[1],ped1Doc=docs[2],ped2Doc=docs[3];
-      if(metaDoc.exists){
-        // SEMPRE usa a nuvem quando ela tem dados
+      const tsFirebase = metaDoc.exists ? (metaDoc.data().ts||0) : 0;
+      const tsLocal    = parseInt(localStorage.getItem(KEY+'_ts')||'0');
+      const localRaw   = localStorage.getItem(KEY);
+      const localDB    = localRaw ? (function(){try{return JSON.parse(localRaw);}catch(e){return null;}})() : null;
+
+      // Usa o mais recente: localStorage ou Firebase
+      // Protege contra reload antes do Firebase receber os dados
+      if(metaDoc.exists && tsFirebase >= tsLocal){
+        // Firebase está atualizado — carrega da nuvem
         try{
           const m=metaDoc.data();
           DB={
@@ -11626,19 +11633,20 @@ window.auth.onAuthStateChanged(function(user){
             ],
           };
           localStorage.setItem(KEY,JSON.stringify(DB));
-          localStorage.setItem(KEY+'_ts',String(metaDoc.data().ts||Date.now()));
+          localStorage.setItem(KEY+'_ts',String(tsFirebase||Date.now()));
         }catch(e){
           console.warn('Erro ao montar DB da nuvem:',e);
-          const local=localStorage.getItem(KEY);
-          if(local)try{DB=JSON.parse(local);}catch(ex){}
+          if(localDB){DB=localDB;}
         }
-      } else {
-        // Nuvem vazia — sobe o local para a nuvem
-        const local=localStorage.getItem(KEY);
-        if(local){
-          try{DB=JSON.parse(local);}catch(e){}
-          salvarNaNuvem(Date.now());
-        }
+      } else if(localDB && tsLocal > tsFirebase){
+        // localStorage é mais recente — usa local e força upload para Firebase
+        DB = localDB;
+        console.log('[LOAD] localStorage mais recente (local:'+tsLocal+' > firebase:'+tsFirebase+') — subindo para nuvem');
+        salvarNaNuvem(tsLocal);
+      } else if(localDB){
+        // Sem Firebase — usa local
+        DB = localDB;
+        if(!metaDoc.exists) salvarNaNuvem(Date.now());
       }
       initApp();
     }).catch(function(e){
