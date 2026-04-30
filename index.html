@@ -10864,29 +10864,27 @@ function syncAntesDe(colecoes, callback){
 function getProximoNumPed(tipo,callback){
   const prefix=tipo==='orc'?'ORC':'PED';
   const campo=tipo==='orc'?'seq_orc':'seq_ped';
-  if(!window.db||!window.currentUser){
-    const seq=tipo==='orc'?DB.seq.orc:DB.seq.ped;
-    callback(null,prefix+'-'+String(seq).padStart(3,'0'),seq);
-    return;
-  }
-  const ref=window.db.collection('lojas').doc(window.currentUser.uid);
-  window.db.runTransaction(function(tx){
-    return tx.get(ref).then(function(doc){
-      const local=tipo==='orc'?DB.seq.orc:DB.seq.ped;
+  // Gera número local imediatamente — sem esperar Firebase
+  // Garante que o salvamento nunca trava por causa de latência de rede
+  const seq=tipo==='orc'?DB.seq.orc:DB.seq.ped;
+  const proximo=(seq||0)+1;
+  if(tipo==='orc')DB.seq.orc=proximo;else DB.seq.ped=proximo;
+  callback(null,prefix+'-'+String(proximo).padStart(3,'0'),proximo);
+  // Sincroniza contador no Firebase em background (não bloqueia o salvamento)
+  if(window.db&&window.currentUser){
+    const ref=window.db.collection('lojas').doc(window.currentUser.uid);
+    ref.get().then(function(doc){
       const cloud=doc.exists&&doc.data()[campo]?doc.data()[campo]:0;
-      const proximo=Math.max(local,cloud)+1;
-      const upd={};upd[campo]=proximo;
-      tx.set(ref,upd,{merge:true});
-      return proximo;
-    });
-  }).then(function(proximo){
-    if(tipo==='orc')DB.seq.orc=proximo;else DB.seq.ped=proximo;
-    callback(null,prefix+'-'+String(proximo).padStart(3,'0'),proximo);
-  }).catch(function(e){
-    console.warn('Transação falhou, usando local:',e);
-    const seq=tipo==='orc'?DB.seq.orc:DB.seq.ped;
-    callback(e,prefix+'-'+String(seq).padStart(3,'0'),seq);
-  });
+      if(cloud>=proximo){
+        // Firebase tem número maior — corrige local
+        if(tipo==='orc')DB.seq.orc=cloud;else DB.seq.ped=cloud;
+      } else {
+        // Atualiza Firebase com nosso número
+        const upd={};upd[campo]=proximo;
+        ref.set(upd,{merge:true});
+      }
+    }).catch(function(e){console.warn('Seq sync erro:',e);});
+  }
 }
 
 
