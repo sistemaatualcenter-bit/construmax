@@ -81,7 +81,7 @@ select.inp option{background:var(--card2)}
 .merge-card:hover{border-color:var(--or)}
 .merge-card.selected{border-color:var(--or);background:#f9731610}
 .scan-badge{background:var(--or);color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:20px;cursor:pointer}
-#si{position:fixed;bottom:18px;right:18px;background:#14532d;color:#86efac;padding:6px 14px;border-radius:20px;font-size:11.5px;font-weight:700;opacity:0;transition:opacity .3s,background .3s;z-index:999;pointer-events:none}
+#si{position:fixed;top:16px;left:50%;transform:translateX(-50%);background:#14532d;color:#86efac;padding:8px 20px;border-radius:20px;font-size:13px;font-weight:700;opacity:0;transition:opacity .3s,background .3s;z-index:9999;pointer-events:none;white-space:nowrap;box-shadow:0 4px 12px #0004}
 #si.show{opacity:1}
 #toast{position:fixed;bottom:50px;right:18px;z-index:1000;display:flex;flex-direction:column;gap:6px}
 .ti{background:var(--card);border:1px solid var(--br);border-radius:9px;padding:10px 16px;font-size:13px;font-weight:600;animation:fdin .2s;min-width:200px}
@@ -2291,19 +2291,24 @@ function salvarNaNuvem(ts){
     totalPedidos:peds.length,
   };
   const col = window.db.collection('lojas').doc(uid).collection('d');
+  // Salva pedidos primeiro (mais críticos), depois meta e produtos em paralelo
   Promise.all([
-    col.doc('meta').set(meta),
-    col.doc('produtos').set({ts:timestamp,produtos:JSON.stringify(DB.produtos||[])}),
     col.doc('pedidos1').set({ts:timestamp,pedidos:JSON.stringify(peds.slice(0,meio))}),
     col.doc('pedidos2').set({ts:timestamp,pedidos:JSON.stringify(peds.slice(meio))}),
   ]).then(function(){
+    // Pedidos salvos — confirma visualmente e salva o resto em background
     _ultimoTsNuvem=timestamp;
     _firebaseSavePending=false;
-    showSI('saved'); // Mostra "✓ Salvo" após Firebase confirmar
+    showSI('saved');
+    // Meta e produtos em background (não críticos para o pedido atual)
+    col.doc('meta').set(meta).catch(function(e){console.warn('meta save erro:',e);});
+    col.doc('produtos').set({ts:timestamp,produtos:JSON.stringify(DB.produtos||[])}).catch(function(e){console.warn('produtos save erro:',e);});
   }).catch(function(e){
     console.warn('Erro salvar nuvem:',e);
     _firebaseSavePending=false;
     showSI('saved');
+    // Tenta novamente em 3s
+    setTimeout(function(){salvarNaNuvem(ts);},3000);
   });
 }
 function showSI(estado){
@@ -10689,17 +10694,6 @@ const firebaseConfig = {
 firebase.initializeApp(firebaseConfig);
 window.auth = firebase.auth();
 window.db   = firebase.firestore();
-// Persistência offline: escreve ficam no IndexedDB e sobrevivem recarregamentos
-// Mesmo se a página fechar antes do Firebase confirmar, os dados NÃO se perdem
-window.db.enablePersistence({synchronizeTabs:true}).catch(function(err){
-  if(err.code==='failed-precondition'){
-    // Múltiplas abas — usa sem sync entre abas (ainda salva localmente)
-    window.db.enablePersistence().catch(function(){});
-  } else if(err.code==='unimplemented'){
-    // Browser não suporta — continua sem persistência
-    console.warn('Firestore offline persistence não suportada neste browser');
-  }
-});
 
 
 // ═══════════════════════════════════════════════════════
