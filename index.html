@@ -2257,8 +2257,26 @@ function loadDB(){
 function saveDB(){
   const dados = JSON.stringify(DB);
   const ts = Date.now();
-  localStorage.setItem(KEY, dados);
-  localStorage.setItem(KEY+'_ts', String(ts));
+  try{
+    // Limpa backups antigos para liberar espaço antes de salvar
+    ['cmx4_auto_bk_0','cmx4_auto_bk_1','cmx4_auto_bk_2',
+     'cmx4_auto_bk_exit','cmx4_auto_bk_0_dt','cmx4_auto_bk_1_dt',
+     'cmx4_auto_bk_2_dt','cmx4_auto_bk_exit_dt'].forEach(function(k){
+      try{localStorage.removeItem(k);}catch(e){}
+    });
+    localStorage.setItem(KEY, dados);
+    localStorage.setItem(KEY+'_ts', String(ts));
+  }catch(e){
+    console.warn('[saveDB] localStorage cheio, tentando liberar espaço...',e.name);
+    // Remove outros dados e tenta novamente
+    try{
+      localStorage.removeItem(KEY+'_ts');
+      localStorage.setItem(KEY, dados);
+      localStorage.setItem(KEY+'_ts', String(ts));
+    }catch(e2){
+      console.error('[saveDB] Não foi possível salvar no localStorage:',e2.name);
+    }
+  }
   _firebaseSavePending=true;
   showSI('pending');
   salvarNaNuvem(ts);
@@ -11496,7 +11514,18 @@ function iniciarListenerSync(){
   },function(e){console.warn('[SYNC] Listener erro:',e);});
 }
 
+function limparLocalStorageAntigos(){
+  // Remove backups antigos que ocupam muito espaço (o DB tem 2.8MB+)
+  var keysParaRemover=['cmx4_auto_bk_0','cmx4_auto_bk_1','cmx4_auto_bk_2',
+    'cmx4_auto_bk_exit','cmx4_auto_bk_0_dt','cmx4_auto_bk_1_dt',
+    'cmx4_auto_bk_2_dt','cmx4_auto_bk_exit_dt','cmx4_bk_hist'];
+  keysParaRemover.forEach(function(k){
+    try{localStorage.removeItem(k);}catch(e){}
+  });
+}
+
 function initApp(){
+  limparLocalStorageAntigos();
   loadDB();
   // Inicializa contadores atômicos no Firebase com valores locais (se ainda não existirem)
   if(window.db&&window.currentUser){
@@ -11535,23 +11564,14 @@ function initApp(){
 
 function iniciarAutoBackup(){
   function salvarSnapshot(){
-    try{
-      const agora=new Date().toISOString();
-      const snap=JSON.stringify(DB);
-      const slot=Math.floor(Date.now()/180000)%3;
-      localStorage.setItem('cmx4_auto_bk_'+slot,snap);
-      localStorage.setItem('cmx4_auto_bk_'+slot+'_dt',agora);
-      // salvarNaNuvem é gerenciado pelo debounce no saveDB
-    }catch(e){console.warn('Auto-backup erro:',e);}
+    // Auto-backup desativado do localStorage (DB muito grande - 2.8MB excede quota)
+    // O Firebase serve como backup principal via salvarNaNuvem()
+    // Backup manual (JSON) continua disponível na aba Backup
   }
-  setTimeout(salvarSnapshot,10000); // Primeiro snapshot: 10s após login
+  setTimeout(salvarSnapshot,10000);
   setInterval(salvarSnapshot,180000);
   window.addEventListener('beforeunload',function(ev){
-    try{
-      const snap=JSON.stringify(DB);
-      localStorage.setItem('cmx4_auto_bk_exit',snap);
-      localStorage.setItem('cmx4_auto_bk_exit_dt',new Date().toISOString());
-    }catch(e){}
+    // Não salva no localStorage ao fechar (já foi salvo pelo saveDB)
     // Avisa se há dados não salvos no Firebase
     if(_firebaseSavePending){
       ev.preventDefault();
