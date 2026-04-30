@@ -2260,11 +2260,19 @@ function saveDB(){
   localStorage.setItem(KEY, dados);
   localStorage.setItem(KEY+'_ts', String(ts));
   showSI();
-  salvarNaNuvem(ts);
+  // Debounce: aguarda 1.5s antes de subir para nuvem
+  // Evita múltiplos writes seguidos (ex: comanda adiciona item, salva estoque, salva pedido)
+  if(_nuvemTimer)clearTimeout(_nuvemTimer);
+  _nuvemTimer=setTimeout(function(){salvarNaNuvem(ts);},1500);
 }
 
+let _ultimoHashNuvem='';
 function salvarNaNuvem(ts){
   if(!window.db || !window.currentUser) return;
+  // Skip if data hasn't changed since last cloud save
+  const hashAtual=String(DB.pedidos.length)+String(DB.produtos.length)+String(ts||0);
+  if(hashAtual===_ultimoHashNuvem)return;
+  _ultimoHashNuvem=hashAtual;
   const uid = window.currentUser.uid;
   const timestamp = ts || Date.now();
   const updatedAt = new Date().toISOString();
@@ -2511,6 +2519,7 @@ function toggleCrit(){
   document.getElementById('crit-arrow').textContent=critOpen?'\u25BC':'\u25B6';
 }
 let _valoresOcultos=false;
+let _nuvemTimer=null; // debounce para salvarNaNuvem
 function toggleOcultarValores(){
   _valoresOcultos=!_valoresOcultos;
   const btn=document.getElementById('btn-ocultar-valores');
@@ -11261,6 +11270,7 @@ function finalizarComanda(){
   if(!cmdItens.length){toast('⚠ Adicione itens','#f59e0b');return;}
   const btn=document.getElementById('cmd-btn-finalizar');
   btn.disabled=true;btn.textContent='Salvando...';
+
   const cliId=document.getElementById('cmd-cli-id').value||'cli-anonimo';
   const cli=DB.clientes.find(c=>c.id===cliId)||DB.clientes.find(c=>c.id==='cli-anonimo');
   const forma=document.getElementById('cmd-pag').value;
@@ -11273,37 +11283,69 @@ function finalizarComanda(){
   const formasAPrazo=['prazo','boleto','receber no local'];
   const isPrazo=formasAPrazo.includes(forma);
   const pagamentos=isPrazo?[]:[{id:uid(),dt:hj(),dtISO:dtHtml(),forma,valor:total,obs:''}];
-  getProximoNumPed('ped',function(err,num){
-    const doc={
-      id:uid(),num,tipo:'ped',
-      cliId:cli.id,cliNome:cli.nome,
-      st:isPrazo?'em-aberto':'pago',
-      dt:hj(),dtISO:dtHtml(),
-      pag:forma,desc,descTipo:'%',obs,vend:'',parceiroId:'',
-      itens:cmdItens.map(it=>({pid:it.pid,nome:it.nome,qtd:it.qtd,punit:it.punit,custo:it.custo,repasse:false})),
-      total,lucro,pagamentos,
-    };
-    DB.pedidos.push(doc);
-    baixarEstoque(doc);
-    saveDB();
-    cmdUltimoId=doc.id;
-    btn.disabled=false;btn.textContent='✓ Finalizar Venda';
-    const suc=document.getElementById('cmd-sucesso');
-    suc.style.display='block';suc.textContent='✓ '+num+' salvo! Total: '+fmt(total);
-    document.getElementById('cmd-btn-imprimir').style.display='block';
-    toast('✓ '+num+' — '+fmt(total),'#10b981');
-    setTimeout(function(){
-      cmdItens=[];
-      ['cmd-prd-src','cmd-obs','cmd-cli-src'].forEach(id=>{const e=document.getElementById(id);if(e)e.value='';});
-      document.getElementById('cmd-cli-id').value='';
-      document.getElementById('cmd-desc').value=0;
-      document.getElementById('cmd-qtd').value=1;
-      suc.style.display='none';
-      renderComanda();
-      document.getElementById('cmd-prd-src').focus();
-    },3000);
+
+  // Gera número local imediato (sem esperar Firebase)
+  // O contador atômico é atualizado em background
+  const numLocal=(DB.seq.ped||0)+1;
+  DB.seq.ped=numLocal;
+  const numStr='PED-'+String(numLocal).padStart(3,'0');
+
+  const doc={
+    id:uid(),num:numStr,tipo:'ped',
+    cliId:cli.id,cliNome:cli.nome,
+    st:isPrazo?'em-aberto':'pago',
+    dt:hj(),dtISO:dtHtml(),
+    pag:forma,desc,descTipo:'%',obs,vend:'',parceiroId:'',
+    itens:cmdItens.map(it=>({pid:it.pid,nome:it.nome,qtd:it.qtd,punit:it.punit,custo:it.custo,repasse:false})),
+    total,lucro,pagamentos,
+  };
+
+  // Salva localmente e baixa estoque IMEDIATAMENTE
+  DB.pedidos.push(doc);
+  baixarEstoque(doc);
+  cmdUltimoId=doc.id;
+
+  // Limpa comanda IMEDIATAMENTE (sem esperar Firebase)
+  const itensSalvos=[...cmdItens];
+  cmdItens=[];
+  ['cmd-prd-src','cmd-obs','cmd-cli-src'].forEach(id=>{
+    const el=document.getElementById(id);if(el)el.value='';
   });
+  document.getElementById('cmd-cli-id').value='';
+  document.getElementById('cmd-desc').value=0;
+  document.getElementById('cmd-qtd').value=1;
+  btn.disabled=false;btn.textContent='✓ Finalizar Venda';
+  renderComanda();
+
+  // Feedback visual rápido
+  toast('✓ '+numStr+' — '+fmt(total),'#10b981');
+  const suc=document.getElementById('cmd-sucesso');
+  if(suc){suc.style.display='block';suc.textContent='✓ '+numStr+' salvo! Total: '+fmt(total);}
+  document.getElementById('cmd-btn-imprimir').style.display='block';
+  document.getElementById('cmd-prd-src').focus();
+  setTimeout(function(){
+    if(suc)suc.style.display='none';
+    document.getElementById('cmd-btn-imprimir').style.display='none';
+  },4000);
+
+  // Salva no Firebase em background (não bloqueia UI)
+  saveDB();
+  salvarRegistro('pedidos',doc.id,doc);
+
+  // Atualiza contador atômico no Firebase em background
+  if(window.db&&window.currentUser){
+    const ref=window.db.collection('lojas').doc(window.currentUser.uid);
+    window.db.runTransaction(function(tx){
+      return tx.get(ref).then(function(d){
+        const cloud=d.exists&&d.data().seq_ped?d.data().seq_ped:0;
+        const proximo=Math.max(numLocal,cloud);
+        tx.set(ref,{seq_ped:proximo},{merge:true});
+        return proximo;
+      });
+    }).catch(function(e){console.warn('seq_ped sync erro:',e);});
+  }
 }
+
 
 function imprimirComandaAtual(){
   if(cmdUltimoId)imprimirDocId(cmdUltimoId);
@@ -11449,10 +11491,10 @@ function iniciarAutoBackup(){
       const slot=Math.floor(Date.now()/180000)%3;
       localStorage.setItem('cmx4_auto_bk_'+slot,snap);
       localStorage.setItem('cmx4_auto_bk_'+slot+'_dt',agora);
-      salvarNaNuvem();
+      // salvarNaNuvem é gerenciado pelo debounce no saveDB
     }catch(e){console.warn('Auto-backup erro:',e);}
   }
-  setTimeout(salvarSnapshot,3000);
+  setTimeout(salvarSnapshot,10000); // Primeiro snapshot: 10s após login
   setInterval(salvarSnapshot,180000);
   window.addEventListener('beforeunload',function(){
     try{
