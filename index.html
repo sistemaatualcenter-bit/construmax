@@ -81,7 +81,7 @@ select.inp option{background:var(--card2)}
 .merge-card:hover{border-color:var(--or)}
 .merge-card.selected{border-color:var(--or);background:#f9731610}
 .scan-badge{background:var(--or);color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:20px;cursor:pointer}
-#si{position:fixed;bottom:18px;right:18px;background:#14532d;color:#86efac;padding:6px 14px;border-radius:20px;font-size:11.5px;font-weight:700;opacity:0;transition:opacity .3s;z-index:999}
+#si{position:fixed;bottom:18px;right:18px;background:#14532d;color:#86efac;padding:6px 14px;border-radius:20px;font-size:11.5px;font-weight:700;opacity:0;transition:opacity .3s,background .3s;z-index:999;pointer-events:none}
 #si.show{opacity:1}
 #toast{position:fixed;bottom:50px;right:18px;z-index:1000;display:flex;flex-direction:column;gap:6px}
 .ti{background:var(--card);border:1px solid var(--br);border-radius:9px;padding:10px 16px;font-size:13px;font-weight:600;animation:fdin .2s;min-width:200px}
@@ -2259,7 +2259,8 @@ function saveDB(){
   const ts = Date.now();
   localStorage.setItem(KEY, dados);
   localStorage.setItem(KEY+'_ts', String(ts));
-  showSI();
+  _firebaseSavePending=true;
+  showSI('pending'); // Mostra "Salvando..." enquanto Firebase não confirmou
   salvarNaNuvem(ts);
 }
 
@@ -2296,12 +2297,29 @@ function salvarNaNuvem(ts){
     col.doc('pedidos1').set({ts:timestamp,pedidos:JSON.stringify(peds.slice(0,meio))}),
     col.doc('pedidos2').set({ts:timestamp,pedidos:JSON.stringify(peds.slice(meio))}),
   ]).then(function(){
-    _ultimoTsNuvem=timestamp; // Marca nosso próprio save para evitar re-sync
+    _ultimoTsNuvem=timestamp;
+    _firebaseSavePending=false;
+    showSI('saved'); // Mostra "✓ Salvo" após Firebase confirmar
   }).catch(function(e){
     console.warn('Erro salvar nuvem:',e);
+    _firebaseSavePending=false;
+    showSI('saved');
   });
 }
-function showSI(){const e=document.getElementById('si');e.classList.add('show');setTimeout(()=>e.classList.remove('show'),1400);}
+function showSI(estado){
+  const e=document.getElementById('si');
+  if(!e)return;
+  if(estado==='pending'){
+    e.textContent='⏳ Salvando...';
+    e.style.background='#92400e';e.style.color='#fde68a';
+    e.classList.add('show');
+  } else {
+    e.textContent='✓ Salvo';
+    e.style.background='#14532d';e.style.color='#86efac';
+    e.classList.add('show');
+    setTimeout(()=>e.classList.remove('show'),2000);
+  }
+}
 function semente(){
   const c1=uid(),c2=uid(),c3=uid();
   DB.clientes=[
@@ -2517,6 +2535,7 @@ function toggleCrit(){
 }
 let _valoresOcultos=false;
 let _pendingSave=false; // flag: evita que listener sobrescreva dados locais não salvos
+let _firebaseSavePending=false; // flag: Firebase ainda não confirmou o save
 function toggleOcultarValores(){
   _valoresOcultos=!_valoresOcultos;
   const btn=document.getElementById('btn-ocultar-valores');
@@ -11490,7 +11509,6 @@ function iniciarListenerSync(){
 
 function initApp(){
   loadDB();
-  iniciarListenerSync(); // Listener em tempo real para sync entre dispositivos
   // Inicializa contadores atômicos no Firebase com valores locais (se ainda não existirem)
   if(window.db&&window.currentUser){
     const ref=window.db.collection('lojas').doc(window.currentUser.uid);
@@ -11539,13 +11557,18 @@ function iniciarAutoBackup(){
   }
   setTimeout(salvarSnapshot,10000); // Primeiro snapshot: 10s após login
   setInterval(salvarSnapshot,180000);
-  window.addEventListener('beforeunload',function(){
+  window.addEventListener('beforeunload',function(ev){
     try{
       const snap=JSON.stringify(DB);
       localStorage.setItem('cmx4_auto_bk_exit',snap);
       localStorage.setItem('cmx4_auto_bk_exit_dt',new Date().toISOString());
-      salvarNaNuvem();
     }catch(e){}
+    // Avisa se há dados não salvos no Firebase
+    if(_firebaseSavePending){
+      ev.preventDefault();
+      ev.returnValue='Ainda salvando dados. Aguarde um momento antes de fechar.';
+      return ev.returnValue;
+    }
   });
 }
 
