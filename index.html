@@ -2255,17 +2255,13 @@ function loadDB(){
   if(!DB.clientes||!DB.clientes.length)semente();
 }
 function saveDB(){
+  const dados = JSON.stringify(DB);
   const ts = Date.now();
+  localStorage.setItem(KEY, dados);
   localStorage.setItem(KEY+'_ts', String(ts));
   _firebaseSavePending=true;
   showSI('pending');
-  // Adia o stringify pesado para depois do frame atual renderizar
-  // Evita travamento visual da UI em bancos grandes (2-3MB)
-  requestAnimationFrame(function(){
-    const dados = JSON.stringify(DB);
-    localStorage.setItem(KEY, dados);
-    salvarNaNuvem(ts);
-  });
+  salvarNaNuvem(ts);
 }
 
 function salvarNaNuvem(ts){
