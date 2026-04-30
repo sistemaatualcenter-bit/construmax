@@ -2268,7 +2268,6 @@ function saveDB(){
     localStorage.setItem(KEY+'_ts', String(ts));
   }catch(e){
     console.warn('[saveDB] localStorage cheio, tentando liberar espaço...',e.name);
-    // Remove outros dados e tenta novamente
     try{
       localStorage.removeItem(KEY+'_ts');
       localStorage.setItem(KEY, dados);
@@ -2279,7 +2278,9 @@ function saveDB(){
   }
   _firebaseSavePending=true;
   showSI('pending');
-  salvarNaNuvem(ts);
+  // Debounce de 800ms para Firebase — evita flood de writes em ações rápidas
+  if(_nuvemTimer) clearTimeout(_nuvemTimer);
+  _nuvemTimer = setTimeout(function(){ salvarNaNuvem(ts); }, 800);
 }
 
 function salvarNaNuvem(ts){
@@ -2556,7 +2557,8 @@ function toggleCrit(){
   document.getElementById('crit-arrow').textContent=critOpen?'\u25BC':'\u25B6';
 }
 let _valoresOcultos=false;
-let _pendingSave=false; // flag: evita que listener sobrescreva dados locais não salvos
+let _pendingSave=false;
+let _nuvemTimer=null; // flag: evita que listener sobrescreva dados locais não salvos
 let _firebaseSavePending=false; // flag: Firebase ainda não confirmou o save
 function toggleOcultarValores(){
   _valoresOcultos=!_valoresOcultos;
@@ -11571,7 +11573,8 @@ function iniciarAutoBackup(){
   setTimeout(salvarSnapshot,10000);
   setInterval(salvarSnapshot,180000);
   window.addEventListener('beforeunload',function(ev){
-    // Não salva no localStorage ao fechar (já foi salvo pelo saveDB)
+    // Força flush do debounce ao fechar/recarregar
+    if(_nuvemTimer){ clearTimeout(_nuvemTimer); salvarNaNuvem(); }
     // Avisa se há dados não salvos no Firebase
     if(_firebaseSavePending){
       ev.preventDefault();
