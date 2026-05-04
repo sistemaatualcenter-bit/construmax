@@ -81,7 +81,7 @@ select.inp option{background:var(--card2)}
 .merge-card:hover{border-color:var(--or)}
 .merge-card.selected{border-color:var(--or);background:#f9731610}
 .scan-badge{background:var(--or);color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:20px;cursor:pointer}
-#si{position:fixed;top:16px;left:50%;transform:translateX(-50%);background:#14532d;color:#86efac;padding:8px 20px;border-radius:20px;font-size:13px;font-weight:700;opacity:0;transition:opacity .3s,background .3s;z-index:9999;pointer-events:none;white-space:nowrap;box-shadow:0 4px 12px #0004}
+#si{position:fixed;bottom:18px;right:18px;background:#14532d;color:#86efac;padding:6px 14px;border-radius:20px;font-size:11.5px;font-weight:700;opacity:0;transition:opacity .3s,background .3s;z-index:999;pointer-events:none}
 #si.show{opacity:1}
 #toast{position:fixed;bottom:50px;right:18px;z-index:1000;display:flex;flex-direction:column;gap:6px}
 .ti{background:var(--card);border:1px solid var(--br);border-radius:9px;padding:10px 16px;font-size:13px;font-weight:600;animation:fdin .2s;min-width:200px}
@@ -2257,30 +2257,11 @@ function loadDB(){
 function saveDB(){
   const dados = JSON.stringify(DB);
   const ts = Date.now();
-  try{
-    // Limpa backups antigos para liberar espaço antes de salvar
-    ['cmx4_auto_bk_0','cmx4_auto_bk_1','cmx4_auto_bk_2',
-     'cmx4_auto_bk_exit','cmx4_auto_bk_0_dt','cmx4_auto_bk_1_dt',
-     'cmx4_auto_bk_2_dt','cmx4_auto_bk_exit_dt'].forEach(function(k){
-      try{localStorage.removeItem(k);}catch(e){}
-    });
-    localStorage.setItem(KEY, dados);
-    localStorage.setItem(KEY+'_ts', String(ts));
-  }catch(e){
-    console.warn('[saveDB] localStorage cheio, tentando liberar espaço...',e.name);
-    try{
-      localStorage.removeItem(KEY+'_ts');
-      localStorage.setItem(KEY, dados);
-      localStorage.setItem(KEY+'_ts', String(ts));
-    }catch(e2){
-      console.error('[saveDB] Não foi possível salvar no localStorage:',e2.name);
-    }
-  }
+  localStorage.setItem(KEY, dados);
+  localStorage.setItem(KEY+'_ts', String(ts));
   _firebaseSavePending=true;
-  showSI('pending');
-  // Debounce de 800ms para Firebase — evita flood de writes em ações rápidas
-  if(_nuvemTimer) clearTimeout(_nuvemTimer);
-  _nuvemTimer = setTimeout(function(){ salvarNaNuvem(ts); }, 800);
+  showSI('pending'); // Mostra "Salvando..." enquanto Firebase não confirmou
+  salvarNaNuvem(ts);
 }
 
 function salvarNaNuvem(ts){
@@ -2310,23 +2291,19 @@ function salvarNaNuvem(ts){
     totalPedidos:peds.length,
   };
   const col = window.db.collection('lojas').doc(uid).collection('d');
-  // Salva todos os 4 documentos em paralelo
-  console.log('[FIREBASE] Iniciando save: '+peds.length+' pedidos, ts='+timestamp);
   Promise.all([
     col.doc('meta').set(meta),
     col.doc('produtos').set({ts:timestamp,produtos:JSON.stringify(DB.produtos||[])}),
     col.doc('pedidos1').set({ts:timestamp,pedidos:JSON.stringify(peds.slice(0,meio))}),
     col.doc('pedidos2').set({ts:timestamp,pedidos:JSON.stringify(peds.slice(meio))}),
   ]).then(function(){
-    console.log('[FIREBASE] ✓ Salvo com sucesso: '+peds.length+' pedidos');
     _ultimoTsNuvem=timestamp;
     _firebaseSavePending=false;
-    showSI('saved');
+    showSI('saved'); // Mostra "✓ Salvo" após Firebase confirmar
   }).catch(function(e){
-    console.error('[FIREBASE] ✗ ERRO ao salvar:', e.code, e.message);
+    console.warn('Erro salvar nuvem:',e);
     _firebaseSavePending=false;
     showSI('saved');
-    setTimeout(function(){salvarNaNuvem(ts);},3000);
   });
 }
 function showSI(estado){
@@ -2557,8 +2534,7 @@ function toggleCrit(){
   document.getElementById('crit-arrow').textContent=critOpen?'\u25BC':'\u25B6';
 }
 let _valoresOcultos=false;
-let _pendingSave=false;
-let _nuvemTimer=null; // flag: evita que listener sobrescreva dados locais não salvos
+let _pendingSave=false; // flag: evita que listener sobrescreva dados locais não salvos
 let _firebaseSavePending=false; // flag: Firebase ainda não confirmou o save
 function toggleOcultarValores(){
   _valoresOcultos=!_valoresOcultos;
@@ -2921,7 +2897,7 @@ function renderDash(){
   }).join('');
   // Mantém blur se estava ativo
   setTimeout(aplicarBlurValores,0);
-  if(typeof renderTarefas==='function') renderTarefas();
+  renderTarefas();
 }
 function impCrit(){
   const low=DB.produtos.filter(p=>p.est<=p.estMin);
@@ -6236,7 +6212,8 @@ function parsearNFe(xml){
   });
   // Se não tiver parcelas mas tiver valor total, cria um boleto único
   if(!boletos.length&&vNF>0){
-    const fatVenc=gx(infNFe.querySelector('fat')||infNFe.getElementsByTagNameNS('*','fat')[0]||{},'dVenc');
+    const fatEl=infNFe.querySelector('fat')||infNFe.getElementsByTagNameNS('*','fat')[0]||null;
+    const fatVenc=fatEl?gx(fatEl,'dVenc'):'';
     if(fatVenc)boletos.push({num:nNF,venc:fatVenc,valor:vNF});
   }
 
@@ -10605,7 +10582,7 @@ function pararScan(){
 // INIT — controlado pelo Firebase Auth (ver firebase_init abaixo)
 // ═══════════════════════════════════════════════════════
 // loadDB() e go('dashboard') são chamados por initApp() após login
-// setCatFil chamado pelo initApp após login (não aqui - evita renderDash antes do script 5 carregar)
+setCatFil('com'); // inicializa labels dos botões COM/SEM com nome da categoria
 
 // Fecha dropdowns de busca ao clicar fora
 document.addEventListener('click',function(e){
@@ -10888,27 +10865,29 @@ function syncAntesDe(colecoes, callback){
 function getProximoNumPed(tipo,callback){
   const prefix=tipo==='orc'?'ORC':'PED';
   const campo=tipo==='orc'?'seq_orc':'seq_ped';
-  // Gera número local imediatamente — sem esperar Firebase
-  // Garante que o salvamento nunca trava por causa de latência de rede
-  const seq=tipo==='orc'?DB.seq.orc:DB.seq.ped;
-  const proximo=(seq||0)+1;
-  if(tipo==='orc')DB.seq.orc=proximo;else DB.seq.ped=proximo;
-  callback(null,prefix+'-'+String(proximo).padStart(3,'0'),proximo);
-  // Sincroniza contador no Firebase em background (não bloqueia o salvamento)
-  if(window.db&&window.currentUser){
-    const ref=window.db.collection('lojas').doc(window.currentUser.uid);
-    ref.get().then(function(doc){
-      const cloud=doc.exists&&doc.data()[campo]?doc.data()[campo]:0;
-      if(cloud>=proximo){
-        // Firebase tem número maior — corrige local
-        if(tipo==='orc')DB.seq.orc=cloud;else DB.seq.ped=cloud;
-      } else {
-        // Atualiza Firebase com nosso número
-        const upd={};upd[campo]=proximo;
-        ref.set(upd,{merge:true});
-      }
-    }).catch(function(e){console.warn('Seq sync erro:',e);});
+  if(!window.db||!window.currentUser){
+    const seq=tipo==='orc'?DB.seq.orc:DB.seq.ped;
+    callback(null,prefix+'-'+String(seq).padStart(3,'0'),seq);
+    return;
   }
+  const ref=window.db.collection('lojas').doc(window.currentUser.uid);
+  window.db.runTransaction(function(tx){
+    return tx.get(ref).then(function(doc){
+      const local=tipo==='orc'?DB.seq.orc:DB.seq.ped;
+      const cloud=doc.exists&&doc.data()[campo]?doc.data()[campo]:0;
+      const proximo=Math.max(local,cloud)+1;
+      const upd={};upd[campo]=proximo;
+      tx.set(ref,upd,{merge:true});
+      return proximo;
+    });
+  }).then(function(proximo){
+    if(tipo==='orc')DB.seq.orc=proximo;else DB.seq.ped=proximo;
+    callback(null,prefix+'-'+String(proximo).padStart(3,'0'),proximo);
+  }).catch(function(e){
+    console.warn('Transação falhou, usando local:',e);
+    const seq=tipo==='orc'?DB.seq.orc:DB.seq.ped;
+    callback(e,prefix+'-'+String(seq).padStart(3,'0'),seq);
+  });
 }
 
 
@@ -11364,12 +11343,25 @@ function finalizarComanda(){
   setTimeout(function(){
     if(suc)suc.style.display='none';
     document.getElementById('cmd-btn-imprimir').style.display='none';
-  },2000);
+  },4000);
 
   // Salva localmente + Firebase via debounce (1.5s)
   saveDB();
   salvarRegistro('pedidos',doc.id,doc);
   // Não cancela o debounce - deixa salvarNaNuvem usar o ts correto do saveDB
+
+  // Atualiza contador atômico no Firebase em background
+  if(window.db&&window.currentUser){
+    const ref=window.db.collection('lojas').doc(window.currentUser.uid);
+    window.db.runTransaction(function(tx){
+      return tx.get(ref).then(function(d){
+        const cloud=d.exists&&d.data().seq_ped?d.data().seq_ped:0;
+        const proximo=Math.max(numLocal,cloud);
+        tx.set(ref,{seq_ped:proximo},{merge:true});
+        return proximo;
+      });
+    }).catch(function(e){console.warn('seq_ped sync erro:',e);});
+  }
 }
 
 
@@ -11516,18 +11508,7 @@ function iniciarListenerSync(){
   },function(e){console.warn('[SYNC] Listener erro:',e);});
 }
 
-function limparLocalStorageAntigos(){
-  // Remove backups antigos que ocupam muito espaço (o DB tem 2.8MB+)
-  var keysParaRemover=['cmx4_auto_bk_0','cmx4_auto_bk_1','cmx4_auto_bk_2',
-    'cmx4_auto_bk_exit','cmx4_auto_bk_0_dt','cmx4_auto_bk_1_dt',
-    'cmx4_auto_bk_2_dt','cmx4_auto_bk_exit_dt','cmx4_bk_hist'];
-  keysParaRemover.forEach(function(k){
-    try{localStorage.removeItem(k);}catch(e){}
-  });
-}
-
 function initApp(){
-  limparLocalStorageAntigos();
   loadDB();
   // Inicializa contadores atômicos no Firebase com valores locais (se ainda não existirem)
   if(window.db&&window.currentUser){
@@ -11541,7 +11522,6 @@ function initApp(){
       if(Object.keys(upd).length>0)ref.set(upd,{merge:true});
     }).catch(function(){});
   }
-  setCatFil('com'); // inicializa labels dos botões COM/SEM
   go('dashboard');
   const sbFoot=document.querySelector('.sb-foot');
   if(sbFoot&&!document.getElementById('btn-logout')){
@@ -11567,15 +11547,23 @@ function initApp(){
 
 function iniciarAutoBackup(){
   function salvarSnapshot(){
-    // Auto-backup desativado do localStorage (DB muito grande - 2.8MB excede quota)
-    // O Firebase serve como backup principal via salvarNaNuvem()
-    // Backup manual (JSON) continua disponível na aba Backup
+    try{
+      const agora=new Date().toISOString();
+      const snap=JSON.stringify(DB);
+      const slot=Math.floor(Date.now()/180000)%3;
+      localStorage.setItem('cmx4_auto_bk_'+slot,snap);
+      localStorage.setItem('cmx4_auto_bk_'+slot+'_dt',agora);
+      // salvarNaNuvem é gerenciado pelo debounce no saveDB
+    }catch(e){console.warn('Auto-backup erro:',e);}
   }
-  setTimeout(salvarSnapshot,10000);
+  setTimeout(salvarSnapshot,10000); // Primeiro snapshot: 10s após login
   setInterval(salvarSnapshot,180000);
   window.addEventListener('beforeunload',function(ev){
-    // Força flush do debounce ao fechar/recarregar
-    if(_nuvemTimer){ clearTimeout(_nuvemTimer); salvarNaNuvem(); }
+    try{
+      const snap=JSON.stringify(DB);
+      localStorage.setItem('cmx4_auto_bk_exit',snap);
+      localStorage.setItem('cmx4_auto_bk_exit_dt',new Date().toISOString());
+    }catch(e){}
     // Avisa se há dados não salvos no Firebase
     if(_firebaseSavePending){
       ev.preventDefault();
@@ -11623,19 +11611,8 @@ window.auth.onAuthStateChanged(function(user){
       col.doc('pedidos2').get(),
     ]).then(function(docs){
       const metaDoc=docs[0],prodDoc=docs[1],ped1Doc=docs[2],ped2Doc=docs[3];
-      const tsFirebase = metaDoc.exists ? (metaDoc.data().ts||0) : 0;
-      const tsLocal    = parseInt(localStorage.getItem(KEY+'_ts')||'0');
-      const localRaw   = localStorage.getItem(KEY);
-      const localDB    = localRaw ? (function(){try{return JSON.parse(localRaw);}catch(e){return null;}})() : null;
-      const localPeds  = localDB ? (localDB.pedidos||[]).length : 0;
-      const fbPeds1    = ped1Doc.exists ? JSON.parse(ped1Doc.data().pedidos||'[]').length : 0;
-      const fbPeds2    = ped2Doc.exists ? JSON.parse(ped2Doc.data().pedidos||'[]').length : 0;
-      console.log('[LOAD] tsFirebase='+tsFirebase+' tsLocal='+tsLocal+' localPeds='+localPeds+' fbPeds='+(fbPeds1+fbPeds2));
-
-      // Usa o mais recente: localStorage ou Firebase
-      // Protege contra reload antes do Firebase receber os dados
-      if(metaDoc.exists && tsFirebase >= tsLocal){
-        // Firebase está atualizado — carrega da nuvem
+      if(metaDoc.exists){
+        // SEMPRE usa a nuvem quando ela tem dados
         try{
           const m=metaDoc.data();
           DB={
@@ -11660,20 +11637,19 @@ window.auth.onAuthStateChanged(function(user){
             ],
           };
           localStorage.setItem(KEY,JSON.stringify(DB));
-          localStorage.setItem(KEY+'_ts',String(tsFirebase||Date.now()));
+          localStorage.setItem(KEY+'_ts',String(metaDoc.data().ts||Date.now()));
         }catch(e){
           console.warn('Erro ao montar DB da nuvem:',e);
-          if(localDB){DB=localDB;}
+          const local=localStorage.getItem(KEY);
+          if(local)try{DB=JSON.parse(local);}catch(ex){}
         }
-      } else if(localDB && tsLocal > tsFirebase){
-        // localStorage é mais recente — usa local e força upload para Firebase
-        DB = localDB;
-        console.log('[LOAD] localStorage mais recente (local:'+tsLocal+' > firebase:'+tsFirebase+') — subindo para nuvem');
-        salvarNaNuvem(tsLocal);
-      } else if(localDB){
-        // Sem Firebase — usa local
-        DB = localDB;
-        if(!metaDoc.exists) salvarNaNuvem(Date.now());
+      } else {
+        // Nuvem vazia — sobe o local para a nuvem
+        const local=localStorage.getItem(KEY);
+        if(local){
+          try{DB=JSON.parse(local);}catch(e){}
+          salvarNaNuvem(Date.now());
+        }
       }
       initApp();
     }).catch(function(e){
