@@ -11547,23 +11547,12 @@ function initApp(){
 
 function iniciarAutoBackup(){
   function salvarSnapshot(){
-    try{
-      const agora=new Date().toISOString();
-      const snap=JSON.stringify(DB);
-      const slot=Math.floor(Date.now()/180000)%3;
-      localStorage.setItem('cmx4_auto_bk_'+slot,snap);
-      localStorage.setItem('cmx4_auto_bk_'+slot+'_dt',agora);
-      // salvarNaNuvem é gerenciado pelo debounce no saveDB
-    }catch(e){console.warn('Auto-backup erro:',e);}
+    // Auto-backup local desativado — DB de 2.8MB excede quota do localStorage
+    // O Firebase é o backup principal. Use Backup > Exportar para backup manual.
   }
   setTimeout(salvarSnapshot,10000); // Primeiro snapshot: 10s após login
   setInterval(salvarSnapshot,180000);
   window.addEventListener('beforeunload',function(ev){
-    try{
-      const snap=JSON.stringify(DB);
-      localStorage.setItem('cmx4_auto_bk_exit',snap);
-      localStorage.setItem('cmx4_auto_bk_exit_dt',new Date().toISOString());
-    }catch(e){}
     // Avisa se há dados não salvos no Firebase
     if(_firebaseSavePending){
       ev.preventDefault();
