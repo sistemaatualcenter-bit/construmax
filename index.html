@@ -2254,18 +2254,43 @@ function loadDB(){
   }catch(e){semente();}
   if(!DB.clientes||!DB.clientes.length)semente();
 }
+let _nuvemTimer=null;
+let _nuvemSaving=false; // evita writes simultâneos
+
 function saveDB(){
   const dados = JSON.stringify(DB);
   const ts = Date.now();
-  localStorage.setItem(KEY, dados);
-  localStorage.setItem(KEY+'_ts', String(ts));
+  try{
+    ['cmx4_auto_bk_0','cmx4_auto_bk_1','cmx4_auto_bk_2',
+     'cmx4_auto_bk_exit','cmx4_auto_bk_0_dt','cmx4_auto_bk_1_dt',
+     'cmx4_auto_bk_2_dt','cmx4_auto_bk_exit_dt'].forEach(function(k){
+      try{localStorage.removeItem(k);}catch(ex){}
+    });
+    localStorage.setItem(KEY, dados);
+    localStorage.setItem(KEY+'_ts', String(ts));
+  }catch(e){
+    console.warn('[saveDB] localStorage cheio, limpando...',e.name);
+    try{
+      localStorage.removeItem(KEY+'_ts');
+      localStorage.setItem(KEY, dados);
+      localStorage.setItem(KEY+'_ts', String(ts));
+    }catch(e2){console.error('[saveDB] Erro localStorage:',e2.name);}
+  }
   _firebaseSavePending=true;
-  showSI('pending'); // Mostra "Salvando..." enquanto Firebase não confirmou
-  salvarNaNuvem(ts);
+  showSI('pending');
+  // Debounce 2s: agrupa saves consecutivos em um único write no Firebase
+  if(_nuvemTimer) clearTimeout(_nuvemTimer);
+  _nuvemTimer=setTimeout(function(){
+    if(_nuvemSaving) return; // já tem write em andamento
+    _nuvemTimer=null;
+    salvarNaNuvem(ts);
+  },2000);
 }
 
 function salvarNaNuvem(ts){
   if(!window.db || !window.currentUser) return;
+  if(_nuvemSaving){console.log('[FIREBASE] write em andamento, aguardando...');return;}
+  _nuvemSaving=true;
   // Sempre salva quando chamada (debounce no saveDB já evita chamadas excessivas)
   const uid = window.currentUser.uid;
   const timestamp = ts || parseInt(localStorage.getItem(KEY+'_ts')||'0') || Date.now();
@@ -2299,11 +2324,16 @@ function salvarNaNuvem(ts){
   ]).then(function(){
     _ultimoTsNuvem=timestamp;
     _firebaseSavePending=false;
-    showSI('saved'); // Mostra "✓ Salvo" após Firebase confirmar
-  }).catch(function(e){
-    console.warn('Erro salvar nuvem:',e);
-    _firebaseSavePending=false;
+    _nuvemSaving=false;
     showSI('saved');
+  }).catch(function(e){
+    console.warn('[FIREBASE] Erro salvar nuvem:',e.code||e.message);
+    _firebaseSavePending=false;
+    _nuvemSaving=false;
+    showSI('saved');
+    setTimeout(function(){
+      if(!_nuvemTimer) salvarNaNuvem(ts);
+    },5000);
   });
 }
 function showSI(estado){
@@ -11554,6 +11584,8 @@ function iniciarAutoBackup(){
   setTimeout(salvarSnapshot,10000); // Primeiro snapshot: 10s após login
   setInterval(salvarSnapshot,180000);
   window.addEventListener('beforeunload',function(ev){
+    // Flush debounce ao fechar/recarregar
+    if(_nuvemTimer){clearTimeout(_nuvemTimer);_nuvemTimer=null;if(!_nuvemSaving)salvarNaNuvem();}
     // Avisa se há dados não salvos no Firebase
     if(_firebaseSavePending){
       ev.preventDefault();
