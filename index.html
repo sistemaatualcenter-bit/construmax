@@ -8098,186 +8098,143 @@ function renderDRE(){
   const fim=document.getElementById('dre-fim')?.value||'';
   const corpo=document.getElementById('dre-corpo');
   if(!corpo)return;
-  const cd=DB.config.catDestaque||'Grosseiro';
 
-  // ── 1. PEDIDOS NO PERÍODO ──
-  const peds=DB.pedidos.filter(function(d){
-    if(d.tipo!=='ped'||d.st==='cancelado')return false;
-    if(ini&&(d.dtISO||'')<ini)return false;
-    if(fim&&(d.dtISO||'')>fim+'T23:59:59')return false;
-    return true;
+  // ── PERÍODO ──
+  const fmtD=function(d){return d?d.split('-').reverse().join('/'):'';};
+  const periodo=ini||fim?((ini?fmtD(ini):'início')+' até '+(fim?fmtD(fim):'hoje')):'Todo o período';
+
+  // ── RECEBIDO NO PERÍODO ──
+  // Soma pagamentos cujo dtISO está no período filtrado
+  var totalRecebido=0;
+  var cmvRecebido=0;
+  DB.pedidos.filter(function(d){
+    return d.tipo==='ped'&&d.st!=='cancelado';
+  }).forEach(function(d){
+    var pagPeriodo=(d.pagamentos||[]).filter(function(p){
+      var pdt=(p.dtISO||'').slice(0,10);
+      if(!pdt)return false;
+      if(ini&&pdt<ini)return false;
+      if(fim&&pdt>fim)return false;
+      return true;
+    }).reduce(function(s,p){return s+p.valor;},0);
+    if(!pagPeriodo)return;
+    totalRecebido+=pagPeriodo;
+    // CMV proporcional ao % recebido do pedido
+    var totalPed=d.total||0;
+    var propPago=totalPed>0?Math.min(1,pagPeriodo/totalPed):0;
+    var subtotal=(d.itens||[]).reduce(function(s,i){return s+i.qtd*i.punit;},0);
+    var fatorDesc=subtotal>0?d.total/subtotal:1;
+    var cmvDoc=(d.itens||[]).filter(function(i){return!i.repasse;})
+      .reduce(function(s,i){return s+i.qtd*(i.custo||0);},0);
+    cmvRecebido+=cmvDoc*propPago;
   });
+  cmvRecebido=Math.round(cmvRecebido*100)/100;
 
-  // Separação Grosseiro vs Demais por item
-  function calcSplit(d){
-    const sub=(d.itens||[]).reduce(function(s,i){return s+i.qtd*i.punit;},0);
-    const fator=sub>0?d.total/sub:1;
-    var fatGro=0,fatDem=0,cmvGro=0,cmvDem=0;
-    (d.itens||[]).filter(function(i){return!i.repasse;}).forEach(function(it){
-      const prod=DB.produtos.find(function(p){return p.id===it.pid;});
-      const cat=prod?prod.cat||'':'';
-      const val=Math.round(it.qtd*it.punit*fator*100)/100;
-      // Usa custo do momento da venda (it.custo) — mais preciso
-      const custo=it.qtd*(it.custo||0);
-      if(cat===cd){fatGro+=val;cmvGro+=custo;}
-      else{fatDem+=val;cmvDem+=custo;}
-    });
-    return{fatGro,fatDem,cmvGro,cmvDem};
-  }
-
-  var recGroBruta=0,recDemBruta=0,cmvGro=0,cmvDem=0;
-  peds.forEach(function(d){
-    const s=calcSplit(d);
-    recGroBruta+=s.fatGro;recDemBruta+=s.fatDem;
-    cmvGro+=s.cmvGro;cmvDem+=s.cmvDem;
-  });
-  const recBruta=recGroBruta+recDemBruta;
-
-  // ── 2. DEDUÇÕES ──
-  const devs=(DB.devolucoes||[]).filter(function(d){
-    const dt=d.dtISO||d.dt||'';
-    if(ini&&dt<ini)return false;
-    if(fim&&dt>fim+'T23:59:59')return false;
-    return true;
-  });
-  const totalDev=devs.reduce(function(s,d){return s+(d.valorTotal||0);},0);
-  const totalDesc=peds.reduce(function(s,d){
-    const subtotal=(d.itens||[]).reduce(function(ss,i){return ss+i.qtd*i.punit;},0);
-    const desc=subtotal-d.total;
-    return s+(desc>0?desc:0);
-  },0);
-  const totalDeduc=totalDev+totalDesc;
-  const recLiq=recBruta-totalDeduc;
-
-  // Proporciona deduções entre grosseiro e demais
-  const propGro=recBruta>0?recGroBruta/recBruta:0;
-  const propDem=recBruta>0?recDemBruta/recBruta:0;
-  const recGroLiq=Math.round((recGroBruta-totalDeduc*propGro)*100)/100;
-  const recDemLiq=Math.round((recDemBruta-totalDeduc*propDem)*100)/100;
-
-  // ── 3. LUCRO BRUTO ──
-  const cmvTotal=cmvGro+cmvDem;
-  // Lucro bruto por linha = receita BRUTA − CMV (sem proporcionar deduções)
-  const lucroGroBruto=recGroBruta-cmvGro;
-  const lucroDemBruto=recDemBruta-cmvDem;
-  const lucroBruto=recLiq-cmvTotal;
-  const margemBruta=recLiq>0?Math.round(lucroBruto/recLiq*1000)/10:0;
-  const margemGroBruta=recGroBruta>0?Math.round(lucroGroBruto/recGroBruta*1000)/10:0;
-  const margemDemBruta=recDemBruta>0?Math.round(lucroDemBruto/recDemBruta*1000)/10:0;
-
-  // ── 4. DESPESAS OPERACIONAIS ──
-  const despFil=(DB.despesas||[]).filter(function(d){
-    const dt=d.dtPago||d.venc||'';
-    if(ini&&dt<ini)return false;
-    if(fim&&dt>fim)return false;
-    return true;
-  });
-  const despFixas=despFil.filter(function(d){return d.tipo==='fixa';}).reduce(function(s,d){return s+d.valor;},0);
-  const despAvulsas=despFil.filter(function(d){return d.tipo==='avulsa'&&d.cat!=='Comissões';}).reduce(function(s,d){return s+d.valor;},0);
-  const comissoes=despFil.filter(function(d){return d.cat==='Comissões';}).reduce(function(s,d){return s+d.valor;},0);
-  const totalDespOp=despFixas+despAvulsas+comissoes;
-  const lucroOp=lucroBruto-totalDespOp;
-  const margemOp=recLiq>0?Math.round(lucroOp/recLiq*1000)/10:0;
-
-  // ── 5. DESPESAS FINANCEIRAS ──
-  const boletosFil=(DB.boletos||[]).filter(function(b){
+  // ── BOLETOS PAGOS NO PERÍODO ──
+  var boletosPagos=(DB.boletos||[]).filter(function(b){
     if(!b.pago||!b.dtPago)return false;
     if(ini&&b.dtPago<ini)return false;
     if(fim&&b.dtPago>fim)return false;
     return true;
-  });
-  const despFin=boletosFil.reduce(function(s,b){return s+b.valor;},0);
-  const lucroLiq=lucroOp-despFin;
-  const margemLiq=recLiq>0?Math.round(lucroLiq/recLiq*1000)/10:0;
+  }).reduce(function(s,b){return s+b.valor;},0);
 
-  // ── Helper linha DRE ──
-  function linha(label,valor,tipo,pct,sub,destaque){
-    const isNeg=tipo==='deduc'||tipo==='custo'||tipo==='desp';
-    const cor=tipo==='resultado'?(valor>=0?'#10b981':'#ef4444')
-              :tipo==='sub-gro'?'var(--or)'
-              :tipo==='sub-dem'?'#3b82f6'
-              :'var(--tx)';
-    const bg=tipo==='resultado'?'background:var(--card2);':'';
-    const borda=tipo==='resultado'?'border-top:2px solid var(--br);border-bottom:2px solid var(--br);':'';
-    const peso=tipo==='resultado'?'font-weight:800;font-size:14px;':'';
-    const subStyle=sub?'padding:5px 16px 5px 32px;font-size:12px;':'padding:9px 16px;';
-    const labelCol=sub?'color:var(--mt);':'';
-    return'<div style="display:flex;align-items:center;'+subStyle+bg+borda+'">'
-      +'<div style="flex:1;font-size:'+(sub?'12':'13')+'px;'+labelCol+peso+'">'+label+'</div>'
-      +'<div style="font-weight:700;font-size:'+(sub?'12':'13')+'px;color:'+(isNeg&&valor!==0?'#ef4444':cor)+';'+peso+'">'
-      +(isNeg&&valor>0?'− ':'')+fmt(Math.abs(valor))
-      +'</div>'
-      +(recLiq>0&&pct!==undefined?'<div style="width:60px;text-align:right;font-size:11px;color:var(--mt);margin-left:12px">'+pct+'%</div>':'<div style="width:60px"></div>')
+  // ── DESPESAS PAGAS NO PERÍODO ──
+  var despFil=(DB.despesas||[]).filter(function(d){
+    var dt=d.dtPago||'';
+    if(!dt)return false; // só pagas
+    if(ini&&dt<ini)return false;
+    if(fim&&dt>fim)return false;
+    return true;
+  });
+  var despFixas=despFil.filter(function(d){return d.tipo==='fixa';})
+    .reduce(function(s,d){return s+d.valor;},0);
+  var despAvulsas=despFil.filter(function(d){return d.tipo==='avulsa'&&d.cat!=='Comissões';})
+    .reduce(function(s,d){return s+d.valor;},0);
+  var comissoes=despFil.filter(function(d){return d.cat==='Comissões';})
+    .reduce(function(s,d){return s+d.valor;},0);
+  var totalDesp=despFixas+despAvulsas+comissoes;
+
+  // ── CÁLCULOS PAINEL 1 (CAIXA) ──
+  var saldoCaixa=totalRecebido-boletosPagos-totalDesp;
+
+  // ── CÁLCULOS PAINEL 2 (LUCRO REAL) ──
+  var lucroBruto=totalRecebido-cmvRecebido;
+  var lucroLiq=lucroBruto-totalDesp-comissoes;
+  var margemBruta=totalRecebido>0?Math.round(lucroBruto/totalRecebido*1000)/10:0;
+  var margemLiq=totalRecebido>0?Math.round(lucroLiq/totalRecebido*1000)/10:0;
+
+  // ── HELPERS ──
+  function fmt2(v){return 'R$ '+v.toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});}
+  function pct(v,base){return base>0?Math.round(v/base*1000)/10:0;}
+
+  function rowTotal(label,val,color){
+    return '<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 16px;background:var(--card2);border-radius:8px;margin:6px 0">'
+      +'<span style="font-weight:800;font-size:14px">'+label+'</span>'
+      +'<span style="font-weight:800;font-size:16px;color:'+color+'">'+fmt2(val)+'</span>'
+      +'</div>';
+  }
+  function rowItem(label,val,sub,color){
+    color=color||'var(--tx)';
+    return '<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 16px;border-bottom:1px solid var(--br2)">'
+      +'<div><div style="font-size:13px">'+label+'</div>'+(sub?'<div style="font-size:10px;color:var(--mt)">'+sub+'</div>':'')+'</div>'
+      +'<span style="font-weight:700;color:'+color+'">'+fmt2(val)+'</span>'
       +'</div>';
   }
   function sep(label){
-    return'<div style="padding:5px 16px;background:var(--card2);border-top:1px solid var(--br);border-bottom:1px solid var(--br);font-size:11px;font-weight:700;color:var(--mt);letter-spacing:0.5px">'+label+'</div>';
+    return '<div style="padding:8px 16px;background:var(--br2);font-size:10px;font-weight:800;color:var(--mt);letter-spacing:1px;text-transform:uppercase">'+label+'</div>';
   }
 
-  const pRecLiq=100;
-  const pGro=recLiq>0?Math.round(recGroLiq/recLiq*1000)/10:0;
-  const pDem=recLiq>0?Math.round(recDemLiq/recLiq*1000)/10:0;
-  const pDeduc=recLiq>0?Math.round(totalDeduc/recLiq*1000)/10:0;
-  const pCmvGro=recLiq>0?Math.round(cmvGro/recLiq*1000)/10:0;
-  const pCmvDem=recLiq>0?Math.round(cmvDem/recLiq*1000)/10:0;
-  const pDespFix=recLiq>0?Math.round(despFixas/recLiq*1000)/10:0;
-  const pDespAv=recLiq>0?Math.round(despAvulsas/recLiq*1000)/10:0;
-  const pCom=recLiq>0?Math.round(comissoes/recLiq*1000)/10:0;
-  const pDespFin=recLiq>0?Math.round(despFin/recLiq*1000)/10:0;
-  const periodo=ini||fim?(ini?ini.split('-').reverse().join('/'):'início')+' a '+(fim?fim.split('-').reverse().join('/'):'hoje'):'Todo o período';
+  corpo.innerHTML=
+    // ── CABEÇALHO ──
+    '<div style="margin-bottom:12px;padding:8px 12px;background:var(--card2);border-radius:8px;font-size:12px;color:var(--mt);text-align:center">📅 '+periodo+' · Apenas valores recebidos/pagos</div>'
 
-  corpo.innerHTML='<div class="card" style="overflow:hidden">'
-    // Cabeçalho
-    +'<div style="padding:14px 16px;border-bottom:1px solid var(--br2);display:flex;justify-content:space-between;align-items:center">'
-    +'<div><div style="font-weight:800;font-size:15px">📋 Demonstrativo de Resultado</div>'
-    +'<div style="font-size:11px;color:var(--mt);margin-top:2px">'+periodo+'</div></div>'
-    +(recLiq>0?'<div style="text-align:right"><div style="font-size:11px;color:var(--mt)">Margem Líquida</div>'
-    +'<div style="font-size:22px;font-weight:800;color:'+(lucroLiq>=0?'#10b981':'#ef4444')+'">'+margemLiq+'%</div></div>':'')
+    // ═══ PAINEL 1 — CAIXA ═══
+    +'<div class="card" style="overflow:hidden;margin-bottom:16px">'
+    +'<div style="padding:12px 16px;background:linear-gradient(135deg,#1e3a5f,#1e40af);color:#fff">'
+    +'<div style="font-weight:800;font-size:15px">💰 Painel 1 — Resultado de Caixa</div>'
+    +'<div style="font-size:11px;opacity:.8;margin-top:2px">O que entrou e saiu do caixa no período</div>'
     +'</div>'
-    // RECEITA
-    +sep('RECEITA')
-    +linha('Receita Bruta Total',recBruta,'total',pRecLiq)
-    +linha('↳ '+cd,recGroBruta,'sub-gro',pGro,true)
-    +linha('↳ Demais Produtos',recDemBruta,'sub-dem',pDem,true)
-    +(totalDeduc>0?linha('(−) Devoluções + Descontos',totalDeduc,'deduc',pDeduc,true):'')
-    +(totalDeduc>0?linha('= Receita Líquida',recLiq,'resultado'):'')
-    // CMV
-    +sep('CUSTO DA MERCADORIA VENDIDA')
-    +linha('(−) CMV '+cd,cmvGro,'custo',pCmvGro,true)
-    +(lucroGroBruto!==0?'<div style="display:flex;align-items:center;padding:3px 16px 3px 32px">'
-      +'<div style="flex:1;font-size:11px;color:var(--mt)">→ Lucro Bruto '+cd+'</div>'
-      +'<div style="font-size:12px;font-weight:700;color:'+(lucroGroBruto>=0?'var(--or)':'#ef4444')+'">'+fmt(lucroGroBruto)+'</div>'
-      +'<div style="width:60px;text-align:right;font-size:11px;color:var(--mt);margin-left:12px">'+margemGroBruta+'%</div>'
-      +'</div>':'')
-    +linha('(−) CMV Demais Produtos',cmvDem,'custo',pCmvDem,true)
-    +(lucroDemBruto!==0?'<div style="display:flex;align-items:center;padding:3px 16px 3px 32px">'
-      +'<div style="flex:1;font-size:11px;color:var(--mt)">→ Lucro Bruto Demais</div>'
-      +'<div style="font-size:12px;font-weight:700;color:'+(lucroDemBruto>=0?'#3b82f6':'#ef4444')+'">'+fmt(lucroDemBruto)+'</div>'
-      +'<div style="width:60px;text-align:right;font-size:11px;color:var(--mt);margin-left:12px">'+margemDemBruta+'%</div>'
-      +'</div>':'')
-    +linha('= Lucro Bruto Total',lucroBruto,'resultado',margemBruta)
-    // DESPESAS
+    +sep('ENTRADA')
+    +rowItem('✅ Recebido de Clientes',''+fmt2(totalRecebido),'Pagamentos recebidos no período','#10b981')
+    +sep('SAÍDAS')
+    +rowItem('🔴 Boletos Pagos',''+fmt2(boletosPagos),'Fornecedores pagos no período','#ef4444')
+    +rowItem('🔴 Despesas Fixas',''+fmt2(despFixas),despFixas>0?'Aluguel, salários, etc.':'Nenhuma no período','#ef4444')
+    +rowItem('🔴 Despesas Avulsas',''+fmt2(despAvulsas),'','#ef4444')
+    +rowItem('🔴 Comissões Pagas',''+fmt2(comissoes),'','#ef4444')
+    +'<div style="padding:4px 16px 4px 24px;font-size:11px;color:var(--mt)">Total saídas: '+fmt2(boletosPagos+totalDesp)+'</div>'
+    +rowTotal('= SALDO DO PERÍODO',saldoCaixa,saldoCaixa>=0?'#10b981':'#ef4444')
+    +'</div>'
+
+    // ═══ PAINEL 2 — LUCRO REAL ═══
+    +'<div class="card" style="overflow:hidden">'
+    +'<div style="padding:12px 16px;background:linear-gradient(135deg,#14532d,#15803d);color:#fff">'
+    +'<div style="font-weight:800;font-size:15px">📈 Painel 2 — Lucro Real</div>'
+    +'<div style="font-size:11px;opacity:.8;margin-top:2px">Quanto sobrou após deduzir o custo real dos produtos vendidos</div>'
+    +'</div>'
+    +sep('RECEITA RECEBIDA')
+    +rowItem('✅ Recebido de Clientes',''+fmt2(totalRecebido),'Já com descontos aplicados','#10b981')
+    +sep('CUSTO DOS PRODUTOS VENDIDOS')
+    +rowItem('🔴 CMV Proporcional ao Recebido',''+fmt2(cmvRecebido),'Custo proporcional ao % recebido de cada pedido','#ef4444')
+    +'<div style="padding:4px 16px;font-size:11px;color:var(--mt)">Margem bruta: '+margemBruta+'%</div>'
+    +rowTotal('= LUCRO BRUTO',lucroBruto,lucroBruto>=0?'var(--or)':'#ef4444')
     +sep('DESPESAS OPERACIONAIS')
-    +linha('(−) Despesas Fixas',despFixas,'desp',pDespFix,true)
-    +linha('(−) Despesas Avulsas',despAvulsas,'desp',pDespAv,true)
-    +linha('(−) Comissões de Parceiros',comissoes,'desp',pCom,true)
-    +linha('= Lucro Operacional',lucroOp,'resultado',margemOp)
-    // FINANCEIRO
-    +(despFin>0?sep('DESPESAS FINANCEIRAS'):'')
-    +(despFin>0?linha('(−) Boletos / Fornecedores Pagos',despFin,'desp',pDespFin,true):'')
-    // RESULTADO
-    +sep('RESULTADO FINAL')
-    +'<div style="padding:16px;background:'+(lucroLiq>=0?'#10b98108':'#ef444408')+';border-top:2px solid '+(lucroLiq>=0?'#10b981':'#ef4444')+'">'
-    +'<div style="display:flex;align-items:center;justify-content:space-between">'
-    +'<div><div style="font-size:18px;font-weight:800;color:'+(lucroLiq>=0?'#10b981':'#ef4444')+'">= LUCRO LÍQUIDO</div>'
-    +'<div style="font-size:11px;color:var(--mt);margin-top:2px">Margem líquida: '+margemLiq+'% sobre receita líquida</div></div>'
-    +'<div style="font-size:28px;font-weight:900;color:'+(lucroLiq>=0?'#10b981':'#ef4444')+'">'+fmt(lucroLiq)+'</div>'
-    +'</div></div>'
-    +'<div style="padding:10px 16px;font-size:11px;color:var(--mt);border-top:1px solid var(--br2)">'
-    +'💡 '+cd+' destacado em laranja · Demais produtos em azul · CMV pelo custo cadastrado × qtd vendida · % calculado sobre receita líquida'
+    +rowItem('🔴 Despesas Fixas',''+fmt2(despFixas),'','#ef4444')
+    +rowItem('🔴 Despesas Avulsas',''+fmt2(despAvulsas),'','#ef4444')
+    +rowItem('🔴 Comissões Pagas',''+fmt2(comissoes),'','#ef4444')
+    +'<div style="padding:4px 16px;font-size:11px;color:var(--mt)">Total despesas: '+fmt2(totalDesp)+'</div>'
+    +'<div style="padding:12px 16px;background:'+(lucroLiq>=0?'#10b98110':'#ef444410')+';border-top:2px solid '+(lucroLiq>=0?'#10b981':'#ef4444')+';margin-top:6px">'
+    +'<div style="display:flex;justify-content:space-between;align-items:center">'
+    +'<div><div style="font-size:18px;font-weight:800;color:'+(lucroLiq>=0?'#10b981':'#ef4444')+'">= LUCRO LÍQUIDO REAL</div>'
+    +'<div style="font-size:11px;color:var(--mt)">Margem líquida: '+margemLiq+'%</div></div>'
+    +'<div style="font-size:24px;font-weight:800;color:'+(lucroLiq>=0?'#10b981':'#ef4444')+'">'+fmt2(lucroLiq)+'</div>'
+    +'</div>'
+    +'<div style="margin-top:8px;padding:8px;background:var(--card2);border-radius:6px;font-size:11px;color:var(--mt)">'
+    +'ℹ️ Nota: Boletos de fornecedores <b>não</b> são deduzidos aqui — o custo já está no CMV (custo dos produtos vendidos).'
+    +'</div>'
     +'</div>'
     +'</div>';
 }
+
 function imprimirDRE(){
   const corpo=document.getElementById('dre-corpo');
   if(!corpo||!corpo.innerHTML){toast('⚠ Gere o DRE primeiro','#f59e0b');return;}
