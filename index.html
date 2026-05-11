@@ -10684,24 +10684,12 @@ window.db   = firebase.firestore();
 // Salva apenas o registro modificado, não o banco inteiro
 // ═══════════════════════════════════════════════════════
 function salvarRegistro(colecao, id, dados){
-  // Granular save: agendado para APÓS o bulk save completar
-  // Evita flood simultâneo de writes que causa resource-exhausted
-  if(!window.db||!window.currentUser)return;
-  setTimeout(function(){
-    if(!window.db||!window.currentUser)return;
-    const uid=window.currentUser.uid;
-    const ref=window.db.collection('lojas').doc(uid).collection(colecao).doc(id);
-    ref.set(Object.assign({},dados,{_ts:Date.now(),_upd:new Date().toISOString()}),{merge:true})
-      .catch(function(e){console.warn('Erro salvar '+colecao+'/'+id+':',e);});
-  }, 3000); // Aguarda 3s para não competir com o bulk save
+  // Desativado: o bulk save (salvarNaNuvem) já salva tudo
+  // Granular writes causavam resource-exhausted no Firebase
 }
 
 function deletarRegistro(colecao, id){
-  if(!window.db||!window.currentUser)return;
-  const uid=window.currentUser.uid;
-  window.db.collection('lojas').doc(uid).collection(colecao).doc(id)
-    .delete()
-    .catch(function(e){console.warn('Erro deletar '+colecao+'/'+id+':',e);});
+  // Desativado: o bulk save (salvarNaNuvem) já reflete exclusões
 }
 
 function carregarColecaoGranular(colecao, cb){
