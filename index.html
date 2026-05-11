@@ -2281,8 +2281,12 @@ function saveDB(){
   // Debounce 2s: agrupa saves consecutivos em um único write no Firebase
   if(_nuvemTimer) clearTimeout(_nuvemTimer);
   _nuvemTimer=setTimeout(function(){
-    if(_nuvemSaving) return; // já tem write em andamento
     _nuvemTimer=null;
+    if(_nuvemSaving){
+      // Write em andamento - reagenda para após completar
+      _nuvemTimer=setTimeout(function(){_nuvemTimer=null;salvarNaNuvem(ts);},3000);
+      return;
+    }
     salvarNaNuvem(ts);
   },2000);
 }
@@ -10844,31 +10848,14 @@ function syncAntesDe(colecoes, callback){
 // CONTADOR ATÔMICO DE PEDIDOS — evita duplicidade multi-dispositivo
 // ═══════════════════════════════════════════════════════
 function getProximoNumPed(tipo,callback){
+  // Usa apenas contador local — sem Firebase transaction
+  // Evita writes extras fora do debounce que causavam resource-exhausted
   const prefix=tipo==='orc'?'ORC':'PED';
-  const campo=tipo==='orc'?'seq_orc':'seq_ped';
-  if(!window.db||!window.currentUser){
-    const seq=tipo==='orc'?DB.seq.orc:DB.seq.ped;
-    callback(null,prefix+'-'+String(seq).padStart(3,'0'),seq);
-    return;
-  }
-  const ref=window.db.collection('lojas').doc(window.currentUser.uid);
-  window.db.runTransaction(function(tx){
-    return tx.get(ref).then(function(doc){
-      const local=tipo==='orc'?DB.seq.orc:DB.seq.ped;
-      const cloud=doc.exists&&doc.data()[campo]?doc.data()[campo]:0;
-      const proximo=Math.max(local,cloud)+1;
-      const upd={};upd[campo]=proximo;
-      tx.set(ref,upd,{merge:true});
-      return proximo;
-    });
-  }).then(function(proximo){
-    if(tipo==='orc')DB.seq.orc=proximo;else DB.seq.ped=proximo;
-    callback(null,prefix+'-'+String(proximo).padStart(3,'0'),proximo);
-  }).catch(function(e){
-    console.warn('Transação falhou, usando local:',e);
-    const seq=tipo==='orc'?DB.seq.orc:DB.seq.ped;
-    callback(e,prefix+'-'+String(seq).padStart(3,'0'),seq);
-  });
+  const seq=(tipo==='orc'?DB.seq.orc:DB.seq.ped)||0;
+  const proximo=seq+1;
+  if(tipo==='orc')DB.seq.orc=proximo;else DB.seq.ped=proximo;
+  callback(null,prefix+'-'+String(proximo).padStart(3,'0'),proximo);
+  // Seq é incluído no próximo saveDB (via DB.seq) — não precisa de write separado
 }
 
 
