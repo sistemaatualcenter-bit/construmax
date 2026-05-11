@@ -2331,9 +2331,10 @@ function salvarNaNuvem(ts){
     _firebaseSavePending=false;
     _nuvemSaving=false;
     showSI('saved');
-    setTimeout(function(){
-      if(!_nuvemTimer) salvarNaNuvem(ts);
-    },5000);
+    // Retry único após 5s - não tenta de novo se já houver timer pendente
+    if(!_nuvemTimer && !_nuvemSaving){
+      setTimeout(function(){salvarNaNuvem(ts);},5000);
+    }
   });
 }
 function showSI(estado){
