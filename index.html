@@ -9945,31 +9945,33 @@ function carregarItensDev(id){
   const subTotalDev=(d.itens||[]).reduce((s,i)=>s+i.qtd*i.punit,0);
   const fatorDescDev=subTotalDev>0?(d.total||0)/subTotalDev:1;
   const temDescDev=Math.abs(fatorDescDev-1)>0.001;
-  const itensHtml=d.itens.map(it=>{
+  // Usa ÍNDICE como chave — suporta mesmo produto múltiplas vezes (pedidos mesclados)
+  const itensHtml=d.itens.map((it,idx)=>{
     const punitReal=Math.round(it.punit*fatorDescDev*100)/100;
     return'<div style="background:var(--card2);border-radius:8px;padding:9px 11px;display:flex;align-items:center;gap:10px">'
       +'<div style="flex:1"><div style="font-weight:600;font-size:12.5px">'+it.nome+'</div>'
       +'<div style="font-size:11px;color:var(--mt)">Qtd: '+it.qtd
       +(temDescDev?' · <span style="text-decoration:line-through;color:#888">'+fmt(it.punit)+'</span> → <span style="color:#f59e0b;font-weight:700">'+fmt(punitReal)+'</span> (com desconto)':' · '+fmt(it.punit))
       +'</div></div>'
-      +'<input type="number" class="inp" style="width:80px" min="0" max="'+it.qtd+'" step="0.01" value="0" id="dev-qtd-'+it.pid
-      +'" oninput="if(devItensQtd[\u0027'+it.pid+'\u0027])devItensQtd[\u0027'+it.pid+'\u0027].qtdDev=parseFloat(this.value)||0">'
+      +'<input type="number" class="inp" style="width:80px" min="0" max="'+it.qtd+'" step="0.01" value="0" id="dev-qtd-'+idx
+      +'" oninput="if(devItensQtd['+idx+'])devItensQtd['+idx+'].qtdDev=parseFloat(this.value)||0">'
       +'</div>';
   }).join('');
   document.getElementById('mdev-itens').innerHTML=
     '<div style="font-size:12px;color:var(--mt);margin-bottom:8px">Informe a quantidade a devolver:'
     +(temDescDev?' <span style="color:#f59e0b;font-weight:700">⚠ Pedido com desconto — crédito calculado com o valor real pago</span>':'')
     +'</div><div style="display:flex;flex-direction:column;gap:7px">'+itensHtml+'</div>';
-  d.itens.forEach(it=>{
+  // Chave = índice (suporta mesmo pid múltiplas vezes em pedidos mesclados)
+  d.itens.forEach((it,idx)=>{
     const prod=DB.produtos.find(p=>p.id===it.pid);
-    devItensQtd[it.pid]={pid:it.pid,nome:it.nome,punit:it.punit,qtdDev:0,cat:prod?.cat||it.cat||''};
+    devItensQtd[idx]={pid:it.pid,nome:it.nome,punit:it.punit,qtdDev:0,cat:prod?.cat||it.cat||''};
   });
 }
 function salvarDevolucao(){
   const pedId=document.getElementById('mdev-ped').value;
   if(!pedId){toast('⚠ Selecione um pedido','#f59e0b');return;}
   const d=DB.pedidos.find(x=>x.id===pedId);if(!d)return;
-  d.itens.forEach(it=>{const v=parseFloat(document.getElementById('dev-qtd-'+it.pid)?.value)||0;if(devItensQtd[it.pid])devItensQtd[it.pid].qtdDev=v;});
+  d.itens.forEach((it,idx)=>{const v=parseFloat(document.getElementById('dev-qtd-'+idx)?.value)||0;if(devItensQtd[idx])devItensQtd[idx].qtdDev=v;});
   // Calcula fator de desconto do pedido original
   const subTotalPed=(d.itens||[]).reduce((s,i)=>s+i.qtd*i.punit,0);
   const fatorDesc=subTotalPed>0?(d.total||0)/subTotalPed:1; // ex: 0.9 se 10% desconto
