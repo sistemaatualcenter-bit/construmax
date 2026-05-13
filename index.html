@@ -6561,7 +6561,7 @@ function xmlFiltrarProd(idx,val){
     return p.nome.toLowerCase().includes(q)
       ||(p.cod||'').toLowerCase().includes(q)
       ||(p.barras||'').includes(q);
-  }).slice(0,10);
+  });
   drop.innerHTML='';
   drop.dataset.sel='-1';
   // Opção criar novo
@@ -9990,8 +9990,10 @@ function salvarDevolucao(){
 function usarCredito(id){
   const dev=DB.devolucoes.find(d=>d.id===id);if(!dev)return;
   // Busca pedidos em aberto do mesmo cliente com saldo devedor
+  // Inclui pedidos mesclados (mesclado-aberto) que também podem ter saldo
+  const stAbertos=['em-aberto','faturado','mesclado-aberto'];
   const abertos=DB.pedidos.filter(d=>
-    d.tipo==='ped'&&d.cliId===dev.cliId&&isAtivo(d)&&docSaldo(d)>0
+    d.tipo==='ped'&&d.cliId===dev.cliId&&stAbertos.includes(d.st)&&docSaldo(d)>0
   ).sort((a,b)=>new Date(a.dtISO)-new Date(b.dtISO));
   if(abertos.length){
     // Mostra pedidos em aberto para escolher
@@ -10012,7 +10014,11 @@ function usarCredito(id){
         forma:'crédito devolução',
         obs:`Crédito ${dev.numDev} aplicado`
       });
-      if(docSaldo(alvo)<=0)alvo.st='pago';
+      if(docSaldo(alvo)<=0){
+        // Respeita status de pedidos mesclados
+        if(alvo.st==='mesclado-aberto')alvo.st='mesclado-pago';
+        else alvo.st='pago';
+      }
       saveDB();renderPedidos();
       toast(`✓ R$ ${aplicar.toFixed(2).replace('.',',')} de crédito aplicado em ${alvo.num}`);
     }
