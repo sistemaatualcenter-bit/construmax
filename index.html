@@ -11514,13 +11514,50 @@ function initApp(){
   iniciarAutoBackup();
 }
 
+function baixarBackupAuto(){
+  try{
+    const agora=new Date();
+    const pad=function(n){return String(n).padStart(2,'0');};
+    const nome='backup-construmax-'
+      +agora.getFullYear()+'-'
+      +pad(agora.getMonth()+1)+'-'
+      +pad(agora.getDate())+'-'
+      +pad(agora.getHours())+'-'
+      +pad(agora.getMinutes())
+      +'.json';
+    const dados=JSON.stringify(DB,null,2);
+    const blob=new Blob([dados],{type:'application/json'});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');
+    a.href=url;
+    a.download=nome;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function(){URL.revokeObjectURL(url);},5000);
+    toast('💾 Backup automático baixado: '+nome,'#10b981');
+    console.log('[BACKUP] Download automático: '+nome);
+  }catch(e){
+    console.warn('[BACKUP] Erro no backup automático:',e);
+  }
+}
+
 function iniciarAutoBackup(){
   function salvarSnapshot(){
     // Auto-backup local desativado — DB de 2.8MB excede quota do localStorage
     // O Firebase é o backup principal. Use Backup > Exportar para backup manual.
   }
-  setTimeout(salvarSnapshot,10000); // Primeiro snapshot: 10s após login
+  setTimeout(salvarSnapshot,10000);
   setInterval(salvarSnapshot,180000);
+
+  // Download automático a cada 30 minutos
+  // Arquivo salvo em C:\Users\User\Downloads com nome backup-construmax-AAAA-MM-DD-HH-MM.json
+  const INTERVALO_BACKUP=30*60*1000; // 30 minutos
+  setTimeout(function(){
+    baixarBackupAuto();
+    setInterval(baixarBackupAuto, INTERVALO_BACKUP);
+  }, INTERVALO_BACKUP);
+
   window.addEventListener('beforeunload',function(ev){
     // Flush debounce ao fechar/recarregar
     if(_nuvemTimer){clearTimeout(_nuvemTimer);_nuvemTimer=null;if(!_nuvemSaving)salvarNaNuvem();}
