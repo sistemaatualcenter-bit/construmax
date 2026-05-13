@@ -6209,7 +6209,7 @@ function parsearNFe(xml){
     const uCom=gx(prod,'uCom')||gx(prod,'uTrib')||'UN';
     const vDescItem=parseFloat(gx(prod,'vDesc'))||0;
     const cEAN=gx(prod,'cEAN')||gx(prod,'cEANTrib')||'';
-    const custoReal=Math.round((vProdItem-vDescItem)*100/100)/qCom;
+    const custoReal=(vProdItem-vDescItem)/qCom; // valor exato da nota, sem arredondar
     // 1. Tenta memória de associação (mais confiável — vínculo manual anterior)
     const memKey=forCNPJ+'|'+cProd;
     const mem=(DB.xmlMemoria||{})[memKey]||null;
@@ -6436,7 +6436,7 @@ function mostrarPreviewXML(d){
       +'<td style="padding:7px 10px;text-align:right">'
       +'<div style="display:flex;align-items:center;justify-content:flex-end;gap:3px">'
       +'<span style="font-size:10px;color:var(--mt)">R$</span>'
-      +'<input class="inp" id="xml-custo-'+i+'" type="number" step="0.01" value="'+it.vUnCom.toFixed(2)+'" style="width:80px;text-align:right;font-size:11px" oninput="xmlAtualizarMargem('+i+')">'
+      +'<input class="inp" id="xml-custo-'+i+'" type="number" step="0.0001" value="'+parseFloat(it.vUnCom.toFixed(4))+'" style="width:80px;text-align:right;font-size:11px" oninput="xmlAtualizarMargem('+i+')">'
       +'</div>'
       +'</td>'
       // Preço venda (editável)
