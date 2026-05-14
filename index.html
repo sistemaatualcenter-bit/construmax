@@ -2278,17 +2278,17 @@ function saveDB(){
   }
   _firebaseSavePending=true;
   showSI('pending');
-  // Debounce 2s: agrupa saves consecutivos em um único write no Firebase
+  // Debounce 4s: agrupa saves consecutivos em um único write no Firebase
   if(_nuvemTimer) clearTimeout(_nuvemTimer);
   _nuvemTimer=setTimeout(function(){
     _nuvemTimer=null;
     if(_nuvemSaving){
       // Write em andamento - reagenda para após completar
-      _nuvemTimer=setTimeout(function(){_nuvemTimer=null;salvarNaNuvem(ts);},3000);
+      _nuvemTimer=setTimeout(function(){_nuvemTimer=null;salvarNaNuvem(ts);},4000);
       return;
     }
     salvarNaNuvem(ts);
-  },2000);
+  },4000);
 }
 
 function salvarNaNuvem(ts){
@@ -2335,10 +2335,7 @@ function salvarNaNuvem(ts){
     _firebaseSavePending=false;
     _nuvemSaving=false;
     showSI('saved');
-    // Retry único após 5s - não tenta de novo se já houver timer pendente
-    if(!_nuvemTimer && !_nuvemSaving){
-      setTimeout(function(){salvarNaNuvem(ts);},5000);
-    }
+    // Sem retry automático - próximo saveDB() tentará novamente via debounce
   });
 }
 function showSI(estado){
