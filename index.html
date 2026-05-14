@@ -2331,7 +2331,7 @@ function salvarNaNuvem(ts){
     _nuvemSaving=false;
     showSI('saved');
   }).catch(function(e){
-    console.warn('[FIREBASE] Erro salvar nuvem:',e.code||e.message);
+    console.error('[FIREBASE] ERRO ao salvar - code:',e.code,'msg:',e.message,'detalhes:',JSON.stringify(e));
     _firebaseSavePending=false;
     _nuvemSaving=false;
     showSI('saved');
@@ -11560,11 +11560,15 @@ function iniciarAutoBackup(){
 
   // Download automático a cada 30 minutos
   // Arquivo salvo em C:\Users\User\Downloads com nome backup-construmax-AAAA-MM-DD-HH-MM.json
-  const INTERVALO_BACKUP=30*60*1000; // 30 minutos
-  setTimeout(function(){
-    baixarBackupAuto();
-    setInterval(baixarBackupAuto, INTERVALO_BACKUP);
-  }, INTERVALO_BACKUP);
+  // Flag global evita múltiplos intervalos ao recarregar a página
+  if(!window._backupIntervalAtivo){
+    window._backupIntervalAtivo=true;
+    const INTERVALO_BACKUP=30*60*1000; // 30 minutos
+    setTimeout(function(){
+      baixarBackupAuto();
+      setInterval(baixarBackupAuto, INTERVALO_BACKUP);
+    }, INTERVALO_BACKUP);
+  }
 
   window.addEventListener('beforeunload',function(ev){
     // Flush debounce ao fechar/recarregar
