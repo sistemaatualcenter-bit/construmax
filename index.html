@@ -2319,23 +2319,28 @@ function salvarNaNuvem(ts){
     clientes:JSON.stringify(DB.clientes||[]),
     totalPedidos:peds.length,
   };
+  // Writes SEQUENCIAIS (não simultâneos) para evitar resource-exhausted
+  // Firebase SDK tem fila limitada — 1 write por vez é mais seguro
   const col = window.db.collection('lojas').doc(uid).collection('d');
-  Promise.all([
-    col.doc('meta').set(meta),
-    col.doc('produtos').set({ts:timestamp,produtos:JSON.stringify(DB.produtos||[])}),
-    col.doc('pedidos1').set({ts:timestamp,pedidos:JSON.stringify(peds.slice(0,meio))}),
-    col.doc('pedidos2').set({ts:timestamp,pedidos:JSON.stringify(peds.slice(meio))}),
-  ]).then(function(){
+  col.doc('pedidos1').set({ts:timestamp,pedidos:JSON.stringify(peds.slice(0,meio))})
+  .then(function(){
+    return col.doc('pedidos2').set({ts:timestamp,pedidos:JSON.stringify(peds.slice(meio))});
+  }).then(function(){
+    return col.doc('meta').set(meta);
+  }).then(function(){
+    return col.doc('produtos').set({ts:timestamp,produtos:JSON.stringify(DB.produtos||[])});
+  }).then(function(){
     _ultimoTsNuvem=timestamp;
     _firebaseSavePending=false;
     _nuvemSaving=false;
     showSI('saved');
+    console.log('[FIREBASE] ✓ Salvo: '+peds.length+' pedidos');
   }).catch(function(e){
-    console.error('[FIREBASE] ERRO ao salvar - code:',e.code,'msg:',e.message,'detalhes:',JSON.stringify(e));
+    console.error('[FIREBASE] ERRO:',e.code,e.message);
     _firebaseSavePending=false;
     _nuvemSaving=false;
     showSI('saved');
-    // Sem retry automático - próximo saveDB() tentará novamente via debounce
+    // Sem retry - próximo saveDB() tentará via debounce
   });
 }
 function showSI(estado){
