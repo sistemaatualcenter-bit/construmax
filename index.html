@@ -3209,22 +3209,30 @@ function abrirDoc(tipo){
   if(window.db&&window.currentUser){
     const uid=window.currentUser.uid;
     const col=window.db.collection('lojas').doc(uid).collection('d');
+    // Se há save pendente, abre direto sem buscar Firebase (local é mais recente)
+    if(_firebaseSavePending||_nuvemSaving||_nuvemTimer){
+      _abrirDocModal(tipo);
+      return;
+    }
     Promise.all([
       col.doc('meta').get(),
       col.doc('pedidos1').get(),
       col.doc('pedidos2').get(),
     ]).then(function(docs){
       const metaDoc=docs[0],ped1Doc=docs[1],ped2Doc=docs[2];
-      if(metaDoc.exists){
+      const tsFirebase=metaDoc.exists?(metaDoc.data().ts||0):0;
+      const tsLocal=parseInt(localStorage.getItem(KEY+'_ts')||'0');
+      if(tsFirebase>=tsLocal&&metaDoc.exists){
         try{
           const m=metaDoc.data();
-          // Atualiza só clientes e seq (partes que afetam criação de pedido)
           if(m.clientes)DB.clientes=JSON.parse(m.clientes);
           if(m.seq){const s=JSON.parse(m.seq);DB.seq=s;}
-          // Atualiza pedidos para ter numeração correta
           const p1=ped1Doc.exists?JSON.parse(ped1Doc.data().pedidos||'[]'):[];
           const p2=ped2Doc.exists?JSON.parse(ped2Doc.data().pedidos||'[]'):[];
-          DB.pedidos=[...p1,...p2];
+          const fbPeds=[...p1,...p2];
+          if(fbPeds.length>=DB.pedidos.length){
+            DB.pedidos=fbPeds;
+          }
           localStorage.setItem(KEY,JSON.stringify(DB));
         }catch(e){console.warn('Sync rápido falhou:',e);}
       }
