@@ -2291,6 +2291,25 @@ function saveDB(){
   },4000);
 }
 
+// ── Helper: retorna chave do documento por trimestre ──
+function getPedidosDocKey(dtISO){
+  if(!dtISO)return'pedidos_2026_Q2'; // fallback
+  const ano=String(dtISO).slice(0,4)||'2026';
+  const mes=parseInt(String(dtISO).slice(5,7))||4;
+  const q=Math.ceil(mes/3);
+  return'pedidos_'+ano+'_Q'+q;
+}
+
+// ── Helper: lista todas as chaves de trimestre que existem nos pedidos ──
+function getPedidosDocKeys(){
+  const keys=new Set();
+  (DB.pedidos||[]).forEach(function(p){
+    keys.add(getPedidosDocKey(p.dtISO||p.dt||''));
+  });
+  if(!keys.size)keys.add('pedidos_2026_Q2');
+  return Array.from(keys);
+}
+
 function salvarNaNuvem(ts){
   if(!window.db || !window.currentUser) return;
   if(_nuvemSaving){console.log('[FIREBASE] write em andamento, aguardando...');return;}
@@ -2300,7 +2319,13 @@ function salvarNaNuvem(ts){
   const timestamp = ts || parseInt(localStorage.getItem(KEY+'_ts')||'0') || Date.now();
   const updatedAt = new Date().toISOString();
   const peds = DB.pedidos||[];
-  const meio = Math.ceil(peds.length/2);
+  // Agrupa pedidos por trimestre (ex: pedidos_2026_Q1)
+  const pedsByQ={};
+  peds.forEach(function(p){
+    const k=getPedidosDocKey(p.dtISO||p.dt||'');
+    if(!pedsByQ[k])pedsByQ[k]=[];
+    pedsByQ[k].push(p);
+  });
   const meta = {
     ts:timestamp, updatedAt:updatedAt,
     config:JSON.stringify(DB.config||{}),
@@ -2319,28 +2344,28 @@ function salvarNaNuvem(ts){
     clientes:JSON.stringify(DB.clientes||[]),
     totalPedidos:peds.length,
   };
-  // Writes SEQUENCIAIS (não simultâneos) para evitar resource-exhausted
-  // Firebase SDK tem fila limitada — 1 write por vez é mais seguro
+  // Writes SEQUENCIAIS por trimestre — escala indefinidamente
   const col = window.db.collection('lojas').doc(uid).collection('d');
-  col.doc('pedidos1').set({ts:timestamp,pedidos:JSON.stringify(peds.slice(0,meio))})
-  .then(function(){
-    return col.doc('pedidos2').set({ts:timestamp,pedidos:JSON.stringify(peds.slice(meio))});
-  }).then(function(){
-    return col.doc('meta').set(meta);
-  }).then(function(){
-    return col.doc('produtos').set({ts:timestamp,produtos:JSON.stringify(DB.produtos||[])});
-  }).then(function(){
+  const qKeys=Object.keys(pedsByQ);
+  // Escreve meta primeiro, depois produtos, depois cada trimestre em sequência
+  var chain=col.doc('meta').set(meta)
+    .then(function(){return col.doc('produtos').set({ts:timestamp,produtos:JSON.stringify(DB.produtos||[])});});
+  qKeys.forEach(function(k){
+    chain=chain.then(function(){
+      return col.doc(k).set({ts:timestamp,pedidos:JSON.stringify(pedsByQ[k])});
+    });
+  });
+  chain.then(function(){
     _ultimoTsNuvem=timestamp;
     _firebaseSavePending=false;
     _nuvemSaving=false;
     showSI('saved');
-    console.log('[FIREBASE] ✓ Salvo: '+peds.length+' pedidos');
+    console.log('[FIREBASE] ✓ Salvo: '+peds.length+' pedidos em '+qKeys.length+' trimestre(s)');
   }).catch(function(e){
     console.error('[FIREBASE] ERRO:',e.code,e.message);
     _firebaseSavePending=false;
     _nuvemSaving=false;
     showSI('saved');
-    // Sem retry - próximo saveDB() tentará via debounce
   });
 }
 function showSI(estado){
@@ -2503,7 +2528,17 @@ function docPago(d){return Math.round((d.pagamentos||[]).reduce((s,p)=>s+p.valor
 function docSaldo(d){return Math.max(0,Math.round((d.total-docPago(d))*100)/100);}
 function baixarEstoque(doc){
   if(!doc||doc.tipo==='orc')return;
-  doc.itens.forEach(it=>{DB.produtos=DB.produtos.map(p=>p.id===it.pid?{...p,est:Math.max(0,p.est-it.qtd)}:p);});
+  // Proteção contra dupla baixa: verifica flag antes de executar
+  if(doc._estoqueJaBaixado)return;
+  doc._estoqueJaBaixado=true;
+  doc.itens.forEach(function(it){
+    DB.produtos=DB.produtos.map(function(p){
+      if(p.id!==it.pid)return p;
+      const novoEst=(p.est||0)-it.qtd;
+      // Permite negativo para não esconder inconsistências
+      return {...p,est:novoEst};
+    });
+  });
 }
 function restaurarEstoque(doc){
   if(!doc||doc.tipo==='orc')return;
@@ -11514,8 +11549,69 @@ function iniciarListenerSync(){
   },function(e){console.warn('[SYNC] Listener erro:',e);});
 }
 
+
+function migrarPedidosTrimestrais(){
+  if(!window.db||!window.currentUser)return;
+  const uid=window.currentUser.uid;
+  const col=window.db.collection('lojas').doc(uid).collection('d');
+  // Busca todos os docs que existem na subcoleção d/
+  col.get().then(function(snapshot){
+    var qDocs=[];
+    snapshot.forEach(function(doc){
+      if(/^pedidos_\d{4}_Q\d$/.test(doc.id)){
+        qDocs.push(doc);
+      }
+    });
+    if(!qDocs.length)return; // ainda no formato legado
+    var allPeds=[];
+    qDocs.forEach(function(doc){
+      try{allPeds=allPeds.concat(JSON.parse(doc.data().pedidos||'[]'));}catch(e){}
+    });
+    if(allPeds.length>=DB.pedidos.length){
+      DB.pedidos=allPeds;
+      localStorage.setItem(KEY,JSON.stringify(DB));
+      console.log('[MIGRAÇÃO] Carregados '+allPeds.length+' pedidos de '+qDocs.length+' trimestre(s)');
+    }
+  }).catch(function(e){
+    // Silencioso - formato legado continua funcionando
+    console.log('[MIGRAÇÃO] Usando formato legado');
+  });
+}
+
+function migrarPedidosTrimestrais(){
+  if(!window.db||!window.currentUser)return;
+  const uid=window.currentUser.uid;
+  const col=window.db.collection('lojas').doc(uid).collection('d');
+  col.get().then(function(snapshot){
+    var qDocs=[];
+    snapshot.forEach(function(doc){
+      if(/^pedidos_\d{4}_Q\d$/.test(doc.id)) qDocs.push(doc);
+    });
+    if(!qDocs.length)return;
+    var allPeds=[];
+    qDocs.forEach(function(doc){
+      try{allPeds=allPeds.concat(JSON.parse(doc.data().pedidos||'[]'));}catch(e){}
+    });
+    if(allPeds.length>=DB.pedidos.length){
+      DB.pedidos=allPeds;
+      localStorage.setItem(KEY,JSON.stringify(DB));
+      console.log('[MIGRAÇÃO] '+allPeds.length+' pedidos de '+qDocs.length+' trimestre(s)');
+      if(typeof renderDash==='function'){
+        if(curPg==='dashboard')renderDash();
+        else if(curPg==='pedidos')renderPedidos();
+      }
+    }
+  }).catch(function(){});
+}
+
 function initApp(){
+  ['cmx4_auto_bk_0','cmx4_auto_bk_1','cmx4_auto_bk_2',
+   'cmx4_auto_bk_exit','cmx4_auto_bk_0_dt','cmx4_auto_bk_1_dt',
+   'cmx4_auto_bk_2_dt','cmx4_auto_bk_exit_dt'].forEach(function(k){
+    try{localStorage.removeItem(k);}catch(e){}
+  });
   loadDB();
+  migrarPedidosTrimestrais();
   // Inicializa contadores atômicos no Firebase com valores locais (se ainda não existirem)
   if(window.db&&window.currentUser){
     const ref=window.db.collection('lojas').doc(window.currentUser.uid);
@@ -11646,8 +11742,8 @@ window.auth.onAuthStateChanged(function(user){
     Promise.all([
       col.doc('meta').get(),
       col.doc('produtos').get(),
-      col.doc('pedidos1').get(),
-      col.doc('pedidos2').get(),
+      col.doc('pedidos1').get(),  // legado - migração automática
+      col.doc('pedidos2').get(),  // legado - migração automática
     ]).then(function(docs){
       const metaDoc=docs[0],prodDoc=docs[1],ped1Doc=docs[2],ped2Doc=docs[3];
       if(metaDoc.exists){
@@ -11670,10 +11766,14 @@ window.auth.onAuthStateChanged(function(user){
             devolucoes:  JSON.parse(m.devolucoes||'[]'),
             clientes:    JSON.parse(m.clientes||'[]'),
             produtos:    prodDoc.exists?JSON.parse(prodDoc.data().produtos||'[]'):[],
-            pedidos:[
-              ...(ped1Doc.exists?JSON.parse(ped1Doc.data().pedidos||'[]'):[]),
-              ...(ped2Doc.exists?JSON.parse(ped2Doc.data().pedidos||'[]'):[]),
-            ],
+            pedidos:(function(){
+              // Tenta carregar formato novo (por trimestre)
+              // Os docs por trimestre são carregados abaixo após o DB inicial
+              // Por enquanto usa o formato legado pedidos1/pedidos2
+              const p1=ped1Doc.exists?JSON.parse(ped1Doc.data().pedidos||'[]'):[];
+              const p2=ped2Doc.exists?JSON.parse(ped2Doc.data().pedidos||'[]'):[];
+              return [...p1,...p2];
+            })(),
           };
           localStorage.setItem(KEY,JSON.stringify(DB));
           localStorage.setItem(KEY+'_ts',String(metaDoc.data().ts||Date.now()));
