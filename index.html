@@ -10812,19 +10812,32 @@ function delTarefa(id){
 function syncAntesDe(colecoes, callback){
   // Se não tem Firebase, executa direto
   if(!window.db||!window.currentUser){callback();return;}
+  // Se há save pendente no debounce, NÃO sincroniza da nuvem
+  // (Firebase ainda tem dados antigos — local é mais recente)
+  if(_firebaseSavePending||_nuvemSaving||_nuvemTimer){
+    console.log('[SYNC] Save pendente — usando dados locais');
+    callback();
+    return;
+  }
   const uid=window.currentUser.uid;
   const col=window.db.collection('lojas').doc(uid).collection('d');
-  // Sempre busca meta (contém clientes, parceiros, fornecedores, despesas, seq)
   const docs=['meta'];
   if(colecoes.includes('produtos'))docs.push('produtos');
   if(colecoes.includes('pedidos')){docs.push('pedidos1');docs.push('pedidos2');}
   Promise.all(docs.map(function(d){return col.doc(d).get();}))
     .then(function(results){
       const metaDoc=results[0];
+      // Só usa Firebase se for mais recente que o local
+      const tsFirebase=metaDoc&&metaDoc.exists?(metaDoc.data().ts||0):0;
+      const tsLocal=parseInt(localStorage.getItem(KEY+'_ts')||'0');
+      if(tsFirebase<tsLocal){
+        console.log('[SYNC] Local mais recente — ignorando Firebase');
+        callback();
+        return;
+      }
       if(metaDoc&&metaDoc.exists){
         try{
           const m=metaDoc.data();
-          // Atualiza seletivamente apenas o que mudou
           if(m.clientes)DB.clientes=JSON.parse(m.clientes);
           if(m.seq)DB.seq=JSON.parse(m.seq);
           if(m.parceiros)DB.parceiros=JSON.parse(m.parceiros);
@@ -10834,23 +10847,30 @@ function syncAntesDe(colecoes, callback){
           if(m.config)DB.config=JSON.parse(m.config);
         }catch(e){console.warn('syncAntesDe meta erro:',e);}
       }
-      // Produtos se solicitado
       if(colecoes.includes('produtos')&&results[1]&&results[1].exists){
-        try{DB.produtos=JSON.parse(results[1].data().produtos||'[]');}catch(e){}
+        try{
+          const fbPrds=JSON.parse(results[1].data().produtos||'[]');
+          // Só substitui se Firebase tem mais ou igual produtos que local
+          if(fbPrds.length>=DB.produtos.length){
+            DB.produtos=fbPrds;
+          }
+        }catch(e){}
       }
-      // Pedidos se solicitado
       if(colecoes.includes('pedidos')){
         const p1=docs.includes('pedidos1')?results[docs.indexOf('pedidos1')]:null;
         const p2=docs.includes('pedidos2')?results[docs.indexOf('pedidos2')]:null;
         try{
           const arr1=p1&&p1.exists?JSON.parse(p1.data().pedidos||'[]'):[];
           const arr2=p2&&p2.exists?JSON.parse(p2.data().pedidos||'[]'):[];
-          DB.pedidos=[...arr1,...arr2];
+          const fbPeds=[...arr1,...arr2];
+          if(fbPeds.length>=DB.pedidos.length){
+            DB.pedidos=fbPeds;
+          }
         }catch(e){}
       }
       localStorage.setItem(KEY,JSON.stringify(DB));
     })
-    .catch(function(){}) // falha silenciosa
+    .catch(function(){})
     .finally(function(){callback();});
 }
 
