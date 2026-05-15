@@ -1463,6 +1463,20 @@ select.inp option{background:var(--card2)}
     </div>
     <div id="bk-hist"></div>
   </div>
+
+  <!-- LOG VIEWER -->
+  <div class="card cp" style="margin-top:14px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+      <div style="font-weight:800;font-size:13px">🔍 Log do Sistema</div>
+      <div style="display:flex;gap:6px">
+        <button class="btn bsm" onclick="renderLogViewer()" style="font-size:11px">↻ Atualizar</button>
+        <button class="btn bsm" onclick="_cmxLogs.length=0;renderLogViewer()" style="font-size:11px;background:#7f1d1d;color:#fca5a5">Limpar</button>
+      </div>
+    </div>
+    <div style="font-size:11px;color:var(--mt);margin-bottom:8px">Registra operações Firebase, erros de sincronização e eventos críticos. Máximo 200 entradas.</div>
+    <div id="cmx-log-viewer" style="max-height:350px;overflow-y:auto"></div>
+  </div>
+
   <div class="card cp" style="margin-top:14px;border-color:#7f1d1d">
     <div class="stl" style="color:#fca5a5">⚠ Zona de Perigo</div>
     <button class="btn bd" onclick="apagarTodos()">🗑 Apagar TODOS os Dados</button>
@@ -2257,6 +2271,46 @@ function loadDB(){
 let _nuvemTimer=null;
 let _nuvemSaving=false; // evita writes simultâneos
 
+
+// ═══════════════════════════════════════════════════════
+// LOGGER — rastreamento de erros e operações críticas
+// ═══════════════════════════════════════════════════════
+const _cmxLogs=[];
+const _cmxMaxLogs=200;
+function cmxLog(nivel,msg,detalhe){
+  const entry={
+    ts:new Date().toLocaleTimeString('pt-BR'),
+    dt:new Date().toLocaleDateString('pt-BR'),
+    nivel:nivel||'INFO',
+    msg:String(msg||''),
+    detalhe:detalhe?String(detalhe).slice(0,200):'',
+  };
+  _cmxLogs.unshift(entry);
+  if(_cmxLogs.length>_cmxMaxLogs)_cmxLogs.pop();
+  // Espelha no console com formatação
+  const con=nivel==='ERROR'?console.error:nivel==='WARN'?console.warn:console.log;
+  con('[CMX '+nivel+'] '+msg+(detalhe?' | '+String(detalhe).slice(0,100):''));
+}
+function renderLogViewer(){
+  const el=document.getElementById('cmx-log-viewer');
+  if(!el)return;
+  if(!_cmxLogs.length){el.innerHTML='<div class="es">Nenhum log registrado ainda.</div>';return;}
+  const cores={ERROR:'#ef4444',WARN:'#f59e0b',INFO:'#60a5fa',FIREBASE:'#10b981',SYNC:'#a78bfa'};
+  el.innerHTML='<div style="display:flex;flex-direction:column;gap:4px">'+
+    _cmxLogs.map(function(e){
+      const cor=cores[e.nivel]||'var(--tx)';
+      return '<div style="background:var(--card2);border-radius:6px;padding:6px 10px;border-left:3px solid '+cor+'">'
+        +'<div style="display:flex;gap:8px;align-items:center">'
+        +'<span style="font-size:10px;font-weight:800;color:'+cor+'">'+e.nivel+'</span>'
+        +'<span style="font-size:10px;color:var(--mt)">'+e.dt+' '+e.ts+'</span>'
+        +'<span style="font-size:12px;flex:1">'+e.msg+'</span>'
+        +'</div>'
+        +(e.detalhe?'<div style="font-size:10px;color:var(--mt);margin-top:2px;font-family:monospace">'+e.detalhe+'</div>':'')
+        +'</div>';
+    }).join('')
+  +'</div>';
+}
+
 function saveDB(){
   const dados = JSON.stringify(DB);
   const ts = Date.now();
@@ -2278,6 +2332,7 @@ function saveDB(){
   }
   _firebaseSavePending=true;
   showSI('pending');
+  cmxLog('INFO','saveDB executado','localPeds='+DB.pedidos.length+' localProds='+DB.produtos.length);
   // Debounce 4s: agrupa saves consecutivos em um único write no Firebase
   if(_nuvemTimer) clearTimeout(_nuvemTimer);
   _nuvemTimer=setTimeout(function(){
@@ -2326,29 +2381,42 @@ function salvarNaNuvem(ts){
     if(!pedsByQ[k])pedsByQ[k]=[];
     pedsByQ[k].push(p);
   });
+  // meta dividido em 4 documentos para reduzir reescrita desnecessária
   const meta = {
     ts:timestamp, updatedAt:updatedAt,
     config:JSON.stringify(DB.config||{}),
     seq:JSON.stringify(DB.seq||{}),
     categorias:JSON.stringify(DB.categorias||[]),
     familias:JSON.stringify(DB.familias||[]),
-    xmlMemoria:JSON.stringify(DB.xmlMemoria||{}),
     campanhas:JSON.stringify(DB.campanhas||[]),
-    parceiros:JSON.stringify(DB.parceiros||[]),
+    totalPedidos:peds.length,
+  };
+  const metaClientes = {
+    ts:timestamp,
+    clientes:JSON.stringify(DB.clientes||[]),
+  };
+  const metaFin = {
+    ts:timestamp,
     boletos:JSON.stringify(DB.boletos||[]),
     despesas:JSON.stringify(DB.despesas||[]),
-    tarefas:JSON.stringify(DB.tarefas||[]),
+  };
+  const metaOp = {
+    ts:timestamp,
     fornecedores:JSON.stringify(DB.fornecedores||[]),
     entradas:JSON.stringify(DB.entradas||[]),
     devolucoes:JSON.stringify(DB.devolucoes||[]),
-    clientes:JSON.stringify(DB.clientes||[]),
-    totalPedidos:peds.length,
+    parceiros:JSON.stringify(DB.parceiros||[]),
+    tarefas:JSON.stringify(DB.tarefas||[]),
+    xmlMemoria:JSON.stringify(DB.xmlMemoria||{}),
   };
   // Writes SEQUENCIAIS por trimestre — escala indefinidamente
   const col = window.db.collection('lojas').doc(uid).collection('d');
   const qKeys=Object.keys(pedsByQ);
   // Escreve meta primeiro, depois produtos, depois cada trimestre em sequência
   var chain=col.doc('meta').set(meta)
+    .then(function(){return col.doc('meta_clientes').set(metaClientes);})
+    .then(function(){return col.doc('meta_fin').set(metaFin);})
+    .then(function(){return col.doc('meta_op').set(metaOp);})
     .then(function(){return col.doc('produtos').set({ts:timestamp,produtos:JSON.stringify(DB.produtos||[])});});
   qKeys.forEach(function(k){
     chain=chain.then(function(){
@@ -2360,9 +2428,9 @@ function salvarNaNuvem(ts){
     _firebaseSavePending=false;
     _nuvemSaving=false;
     showSI('saved');
-    console.log('[FIREBASE] ✓ Salvo: '+peds.length+' pedidos em '+qKeys.length+' trimestre(s)');
+    cmxLog('FIREBASE','Salvo com sucesso',''+peds.length+' pedidos em '+qKeys.length+' trimestre(s), ts='+timestamp);
   }).catch(function(e){
-    console.error('[FIREBASE] ERRO:',e.code,e.message);
+    cmxLog('ERROR','Erro ao salvar no Firebase',(e.code||'')+' '+( e.message||''));
     _firebaseSavePending=false;
     _nuvemSaving=false;
     showSI('saved');
@@ -3103,7 +3171,18 @@ function salvarCliente(){
   saveDB();closeMD('cli');renderClientes();
 }
 function delCliente(id){
-  if(!confirm('Remover cliente?'))return;
+  // Verifica vínculos antes de excluir
+  const pedAbertos=DB.pedidos.filter(p=>p.cliId===id&&isAtivo(p)&&docSaldo(p)>0);
+  if(pedAbertos.length>0){
+    toast('⚠ Cliente tem '+pedAbertos.length+' pedido(s) em aberto. Quite antes de excluir.','#ef4444');
+    return;
+  }
+  const pedTodos=DB.pedidos.filter(p=>p.cliId===id&&isAtivo(p));
+  if(pedTodos.length>0){
+    if(!confirm('Este cliente tem '+pedTodos.length+' pedido(s). Excluir mesmo assim?'))return;
+  } else {
+    if(!confirm('Remover cliente?'))return;
+  }
   DB.clientes=DB.clientes.filter(c=>c.id!==id);
   deletarRegistro('clientes',id);
   saveDB();renderClientes();toast('Cliente removido','#ef4444');
@@ -5160,7 +5239,14 @@ function salvarProduto(){
   if(prodData)salvarRegistro('produtos',prodId,prodData);
   saveDB();closeMD('prd');renderProdutos();
 }
-function delProduto(id){if(!confirm('Remover produto?'))return;DB.produtos=DB.produtos.filter(p=>p.id!==id);deletarRegistro('produtos',id);saveDB();renderProdutos();toast('Removido','#ef4444');}
+function delProduto(id){
+  // Verifica vínculos antes de excluir
+  const pedComProd=DB.pedidos.filter(p=>isAtivo(p)&&p.itens&&p.itens.some(it=>it.pid===id));
+  if(pedComProd.length>0){
+    toast('⚠ Produto está em '+pedComProd.length+' pedido(s) ativo(s). Não é possível excluir.','#ef4444');
+    return;
+  }
+  if(!confirm('Remover produto?'))return;DB.produtos=DB.produtos.filter(p=>p.id!==id);deletarRegistro('produtos',id);saveDB();renderProdutos();toast('Removido','#ef4444');}
 
 // ═══════════════════════════════════════════════════════
 // ESTOQUE
@@ -5581,7 +5667,19 @@ function salvarFornecedor(){
 const _fd=DB.fornecedores.find(f=>f.id===_fid);if(_fd)salvarRegistro('fornecedores',_fid,_fd);
   saveDB();closeMD('for');renderFornecedores();
 }
-function delFornecedor(id){if(!confirm('Remover?'))return;DB.fornecedores=DB.fornecedores.filter(f=>f.id!==id);deletarRegistro('fornecedores',id);
+function delFornecedor(id){
+  // Verifica vínculos antes de excluir
+  const entradas=DB.entradas.filter(e=>e.forid===id);
+  const boletos=DB.boletos.filter(b=>b.forid===id&&!b.pago);
+  if(boletos.length>0){
+    toast('⚠ Fornecedor tem '+boletos.length+' boleto(s) em aberto. Quite antes de excluir.','#ef4444');
+    return;
+  }
+  if(entradas.length>0){
+    if(!confirm('Fornecedor tem '+entradas.length+' entrada(s) registrada(s). Excluir mesmo assim?'))return;
+  } else {
+    if(!confirm('Remover?'))return;
+  }DB.fornecedores=DB.fornecedores.filter(f=>f.id!==id);deletarRegistro('fornecedores',id);
   saveDB();renderFornecedores();toast('Removido','#ef4444');}
 
 // ═══════════════════════════════════════════════════════
@@ -10089,7 +10187,13 @@ function aplicarCreditoNoPedido(devId, pedId){
   verDoc(pedId);// Reabrir o modal atualizado
   toast(`✓ Crédito ${dev.numDev} (${fmt(aplicar)}) aplicado em ${ped.num}`);
 }
-function delDevolucao(id){if(!confirm('Remover?'))return;DB.devolucoes=DB.devolucoes.filter(d=>d.id!==id);saveDB();renderDevolucoes();toast('Removida','#ef4444');}
+function delDevolucao(id){
+  const dev=DB.devolucoes.find(d=>d.id===id);
+  if(dev&&dev.creditoStatus==='usado'){
+    if(!confirm('Este crédito já foi aplicado em um pedido. Excluir mesmo assim?'))return;
+  } else {
+    if(!confirm('Remover?'))return;
+  }DB.devolucoes=DB.devolucoes.filter(d=>d.id!==id);saveDB();renderDevolucoes();toast('Removida','#ef4444');}
 
 // ═══════════════════════════════════════════════════════
 // CONFIG
@@ -10381,6 +10485,7 @@ function renderBackup(){
 
   const hist=JSON.parse(localStorage.getItem('cmx4_bk_hist')||'[]');
   document.getElementById('bk-hist').innerHTML=hist.length?hist.slice().reverse().map(h=>`<div class="ir"><span style="color:var(--mt)">${h.dt}</span><span>${h.tipo}</span><span style="color:var(--mt)">${h.kb} KB</span></div>`).join(''):'<div class="es">Nenhum backup realizado</div>';
+  renderLogViewer();
 }
 function restaurarAutoBackup(slot){
   const snap=localStorage.getItem('cmx4_auto_bk_'+slot);
@@ -10913,7 +11018,7 @@ function syncAntesDe(colecoes, callback){
       }
       localStorage.setItem(KEY,JSON.stringify(DB));
     })
-    .catch(function(){})
+    .catch(function(e){cmxLog('WARN','syncAntesDe falhou',(e&&e.message)||String(e));})
     .finally(function(){callback();});
 }
 
@@ -11582,26 +11687,61 @@ function migrarPedidosTrimestrais(){
   if(!window.db||!window.currentUser)return;
   const uid=window.currentUser.uid;
   const col=window.db.collection('lojas').doc(uid).collection('d');
+  // Carrega todos os docs da subcoleção d/
   col.get().then(function(snapshot){
-    var qDocs=[];
+    var qDocs=[], metaCli=null, metaFin=null, metaOp=null;
     snapshot.forEach(function(doc){
       if(/^pedidos_\d{4}_Q\d$/.test(doc.id)) qDocs.push(doc);
+      if(doc.id==='meta_clientes') metaCli=doc;
+      if(doc.id==='meta_fin')      metaFin=doc;
+      if(doc.id==='meta_op')       metaOp=doc;
     });
-    if(!qDocs.length)return;
-    var allPeds=[];
-    qDocs.forEach(function(doc){
-      try{allPeds=allPeds.concat(JSON.parse(doc.data().pedidos||'[]'));}catch(e){}
-    });
-    if(allPeds.length>=DB.pedidos.length){
-      DB.pedidos=allPeds;
+    var mudou=false;
+    // Carrega pedidos trimestrais
+    if(qDocs.length){
+      var allPeds=[];
+      qDocs.forEach(function(doc){
+        try{allPeds=allPeds.concat(JSON.parse(doc.data().pedidos||'[]'));}catch(e){}
+      });
+      if(allPeds.length>=DB.pedidos.length){
+        DB.pedidos=allPeds; mudou=true;
+        cmxLog('SYNC','Migração trimestral carregada',''+allPeds.length+' pedidos de '+qDocs.length+' trimestre(s)');
+      }
+    }
+    // Carrega meta_clientes se existir
+    if(metaCli&&metaCli.exists){
+      try{DB.clientes=JSON.parse(metaCli.data().clientes||'[]');mudou=true;}catch(e){}
+    }
+    // Carrega meta_fin se existir
+    if(metaFin&&metaFin.exists){
+      try{
+        const mf=metaFin.data();
+        if(mf.boletos)DB.boletos=JSON.parse(mf.boletos||'[]');
+        if(mf.despesas)DB.despesas=JSON.parse(mf.despesas||'[]');
+        mudou=true;
+      }catch(e){}
+    }
+    // Carrega meta_op se existir
+    if(metaOp&&metaOp.exists){
+      try{
+        const mo=metaOp.data();
+        if(mo.fornecedores)DB.fornecedores=JSON.parse(mo.fornecedores||'[]');
+        if(mo.entradas)DB.entradas=JSON.parse(mo.entradas||'[]');
+        if(mo.devolucoes)DB.devolucoes=JSON.parse(mo.devolucoes||'[]');
+        if(mo.parceiros)DB.parceiros=JSON.parse(mo.parceiros||'[]');
+        if(mo.tarefas)DB.tarefas=JSON.parse(mo.tarefas||'[]');
+        if(mo.xmlMemoria)DB.xmlMemoria=JSON.parse(mo.xmlMemoria||'{}');
+        mudou=true;
+      }catch(e){}
+    }
+    if(mudou){
       localStorage.setItem(KEY,JSON.stringify(DB));
-      console.log('[MIGRAÇÃO] '+allPeds.length+' pedidos de '+qDocs.length+' trimestre(s)');
       if(typeof renderDash==='function'){
         if(curPg==='dashboard')renderDash();
         else if(curPg==='pedidos')renderPedidos();
       }
     }
-  }).catch(function(){});
+  }).catch(function(e){cmxLog('WARN','migrarPedidosTrimestrais falhou',(e&&e.message)||String(e));});
 }
 
 function initApp(){
@@ -11622,7 +11762,7 @@ function initApp(){
       if(DB.seq.ped>cloudPed)upd.seq_ped=DB.seq.ped;
       if(DB.seq.orc>cloudOrc)upd.seq_orc=DB.seq.orc;
       if(Object.keys(upd).length>0)ref.set(upd,{merge:true});
-    }).catch(function(){});
+    }).catch(function(e){cmxLog('WARN','Seq sync Firebase falhou',(e&&e.message)||String(e));});
   }
   setCatFil('com'); // inicializa labels COM/SEM após scripts carregados
   go('dashboard');
@@ -11750,13 +11890,15 @@ window.auth.onAuthStateChanged(function(user){
         // SEMPRE usa a nuvem quando ela tem dados
         try{
           const m=metaDoc.data();
+          // Carrega meta base (config, seq, categorias)
           DB={
             config:      JSON.parse(m.config||'{}'),
             seq:         JSON.parse(m.seq||'{}'),
             categorias:  JSON.parse(m.categorias||'[]'),
             familias:    JSON.parse(m.familias||'[]'),
-            xmlMemoria:  JSON.parse(m.xmlMemoria||'{}'),
             campanhas:   JSON.parse(m.campanhas||'[]'),
+            // Campos do meta legado (fallback se novos docs não existirem)
+            xmlMemoria:  JSON.parse(m.xmlMemoria||'{}'),
             parceiros:   JSON.parse(m.parceiros||'[]'),
             boletos:     JSON.parse(m.boletos||'[]'),
             despesas:    JSON.parse(m.despesas||'[]'),
@@ -11767,9 +11909,6 @@ window.auth.onAuthStateChanged(function(user){
             clientes:    JSON.parse(m.clientes||'[]'),
             produtos:    prodDoc.exists?JSON.parse(prodDoc.data().produtos||'[]'):[],
             pedidos:(function(){
-              // Tenta carregar formato novo (por trimestre)
-              // Os docs por trimestre são carregados abaixo após o DB inicial
-              // Por enquanto usa o formato legado pedidos1/pedidos2
               const p1=ped1Doc.exists?JSON.parse(ped1Doc.data().pedidos||'[]'):[];
               const p2=ped2Doc.exists?JSON.parse(ped2Doc.data().pedidos||'[]'):[];
               return [...p1,...p2];
