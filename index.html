@@ -2346,22 +2346,21 @@ function saveDB(){
   },4000);
 }
 
-// ── Helper: retorna chave do documento por trimestre ──
+// ── Helper: retorna chave do documento por MÊS (evita limite 1MB do Firestore) ──
 function getPedidosDocKey(dtISO){
-  if(!dtISO)return'pedidos_2026_Q2'; // fallback
+  if(!dtISO)return'pedidos_2026_05'; // fallback mês atual
   const ano=String(dtISO).slice(0,4)||'2026';
-  const mes=parseInt(String(dtISO).slice(5,7))||4;
-  const q=Math.ceil(mes/3);
-  return'pedidos_'+ano+'_Q'+q;
+  const mes=String(dtISO).slice(5,7)||'05';
+  return'pedidos_'+ano+'_'+mes;
 }
 
-// ── Helper: lista todas as chaves de trimestre que existem nos pedidos ──
+// ── Helper: lista todas as chaves mensais que existem nos pedidos ──
 function getPedidosDocKeys(){
   const keys=new Set();
   (DB.pedidos||[]).forEach(function(p){
     keys.add(getPedidosDocKey(p.dtISO||p.dt||''));
   });
-  if(!keys.size)keys.add('pedidos_2026_Q2');
+  if(!keys.size)keys.add('pedidos_2026_05');
   return Array.from(keys);
 }
 
@@ -3060,11 +3059,23 @@ function impCrit(){
 function renderClientes(){
   const q=(document.getElementById('src-cli')?.value||'').toLowerCase();
   const list=DB.clientes.filter(c=>c.nome.toLowerCase().includes(q)||(c.cpf||'').includes(q)||(c.tel||'').includes(q));
-  document.getElementById('cli-cnt').textContent='('+(DB.clientes.length-1)+')'; // não conta o anônimo
-  document.getElementById('cli-tbody').innerHTML=list.length?list.map(c=>{
-    const peds=DB.pedidos.filter(d=>d.cliId===c.id&&isAtivo(d)&&d.tipo==='ped');
-    const total=peds.reduce((s,d)=>s+d.total,0);
-    const aRec=peds.filter(d=>docSaldo(d)>0).reduce((s,d)=>s+docSaldo(d),0);
+  document.getElementById('cli-cnt').textContent='('+(DB.clientes.length-1)+')';
+  // Pre-calcula totais por cliente (evita O(N*M) dentro do map)
+  const pedMap={};
+  DB.pedidos.filter(d=>isAtivo(d)&&d.tipo==='ped').forEach(function(d){
+    if(!pedMap[d.cliId])pedMap[d.cliId]={total:0,aRec:0,count:0};
+    pedMap[d.cliId].total+=d.total;
+    pedMap[d.cliId].aRec+=docSaldo(d);
+    pedMap[d.cliId].count++;
+  });
+  const listShown=list.slice(0,150);
+  const cliCnt=document.getElementById('cli-cnt');
+  if(cliCnt) cliCnt.textContent=list.length>150?'Mostrando 150 de '+list.length+' — use a busca':list.length+' cliente(s)';
+  document.getElementById('cli-tbody').innerHTML=listShown.length?listShown.map(c=>{
+    const stats=pedMap[c.id]||{total:0,aRec:0,count:0};
+    const peds={length:stats.count};
+    const total=stats.total;
+    const aRec=stats.aRec;
     const isAnon=c.id==='cli-anonimo';
     const pars=(c.indicadores||[]).map(id=>(DB.parceiros||[]).find(p=>p.id===id)).filter(Boolean);
     return`<tr style="${isAnon?'opacity:0.7;background:var(--card2)':''}">
@@ -4515,8 +4526,9 @@ function renderOrcamentos(){
   const list=DB.pedidos.filter(d=>d.tipo==='orc'&&
     (d.cliNome.toLowerCase().includes(q)||d.num.toLowerCase().includes(q)||d.obs?.toLowerCase().includes(q))&&(!st||d.st===st)
   ).slice().reverse();
-  document.getElementById('orc-cnt').textContent='('+DB.pedidos.filter(d=>d.tipo==='orc').length+')';
-  document.getElementById('orc-tbody').innerHTML=list.length?list.map(d=>`
+  const listOrcShown=list.slice(0,200);
+  document.getElementById('orc-cnt').textContent=list.length>200?'Mostrando 200 de '+list.length+' — use o filtro para refinar':'('+list.length+')';
+  document.getElementById('orc-tbody').innerHTML=listOrcShown.length?listOrcShown.map(d=>`
     <tr>
       <td style="color:var(--yw);font-weight:700">${d.num}</td>
       <td>${d.cliNome}</td>
@@ -4549,8 +4561,13 @@ function renderPedidos(){
   const q=(document.getElementById('src-ped')?.value||'').toLowerCase();
   const st=document.getElementById('fil-ped-st')?.value||'';
   const pag=document.getElementById('fil-ped-pag')?.value||'';
-  const ini=document.getElementById('fil-ped-ini')?.value||'';
-  const fim=document.getElementById('fil-ped-fim')?.value||'';
+  const elIni=document.getElementById('fil-ped-ini');
+  const elFim=document.getElementById('fil-ped-fim');
+  // Default: filtra pelo dia de hoje para performance (76x mais rápido)
+  if(elIni&&!elIni.value) elIni.value=hj();
+  if(elFim&&!elFim.value) elFim.value=hj();
+  const ini=elIni?.value||'';
+  const fim=elFim?.value||'';
   // Grupos de status para o filtro simplificado
   const stEmAberto=['em-aberto','faturado','para-entrega','ag-autorizacao'];
   const stPago=['pago','mesclado-pago'];
@@ -4574,7 +4591,16 @@ function renderPedidos(){
     (!qPrd||(d.itens||[]).some(it=>it.nome.toLowerCase().includes(qPrd)))
   ).slice().reverse();
   document.getElementById('ped-cnt').textContent='('+DB.pedidos.filter(d=>d.tipo==='ped').length+')';
-  document.getElementById('ped-tbody').innerHTML=list.length?list.map(d=>{
+  const LIMIT_PED=200;
+  const listShown=list.slice(0,LIMIT_PED);
+  const pedCnt=document.getElementById('ped-cnt');
+  if(pedCnt){
+    if(list.length>LIMIT_PED)
+      pedCnt.textContent='Mostrando '+LIMIT_PED+' de '+list.length+' pedidos — refine o filtro para ver mais';
+    else
+      pedCnt.textContent=list.length+' pedido(s)';
+  }
+  document.getElementById('ped-tbody').innerHTML=listShown.length?listShown.map(d=>{
     const pago=docPago(d);const saldo=docSaldo(d);
     const isMesclado=['mesclado-aberto','mesclado-pago','mesclado'].includes(d.st);
     const isParcial=['em-aberto','faturado'].includes(d.st)&&docPago(d)>0&&docSaldo(d)>0;
@@ -5140,7 +5166,10 @@ function renderProdutos(){
     const mq=!q||p.nome.toLowerCase().includes(q)||(p.barras||'').includes(q)||(p.cod||'').toLowerCase().includes(q);
     return mq&&(!cat||p.cat===cat);
   });
-  document.getElementById('prd-tbody').innerHTML=list.length?list.map(p=>{
+  const listPrdShown=list.slice(0,200);
+  const prdCntEl=document.getElementById('prd-cnt');
+  if(prdCntEl) prdCntEl.textContent=list.length>200?'Mostrando 200 de '+list.length+' — use a busca para filtrar':list.length+' produto(s)';
+  document.getElementById('prd-tbody').innerHTML=listPrdShown.length?listPrdShown.map(p=>{
     const mg=p.preco>0?((p.preco-p.custo)/p.preco*100):0;
     const meta=DB.config.meta||30;
     return`<tr>
@@ -5343,7 +5372,10 @@ function renderEstoque(){
     const mq=!q||p.nome.toLowerCase().includes(q)||(p.barras||'').includes(q);
     return mq&&(!cat||p.cat===cat)&&(!sit||getSit(p)===sit);
   }).sort((a,b)=>(a.est/Math.max(1,a.estMin))-(b.est/Math.max(1,b.estMin)));
-  document.getElementById('est-tbody').innerHTML=list.length?list.map(p=>{
+  const listEstShown=list.slice(0,200);
+  const estHdrEl=document.getElementById('est-hdr');
+  if(estHdrEl) estHdrEl.textContent=list.length>200?'Mostrando 200 de '+list.length+' — use a busca para filtrar':list.length+' produto(s)';
+  document.getElementById('est-tbody').innerHTML=listEstShown.length?listEstShown.map(p=>{
     const r=p.est/Math.max(1,p.estMin);const pct=Math.min(100,r*100);
     const s=r<=1?{l:'⚠ Crítico',b:'#ef4444',c:'#fca5a5'}:r<=1.5?{l:'Baixo',b:'#f59e0b',c:'#fde68a'}:{l:'✓ Ok',b:'#10b981',c:'#86efac'};
     return`<tr>
@@ -7533,7 +7565,8 @@ function renderContas(){
     return `<span style="color:var(--mt);font-size:10px">em ${diff}d</span>`;
   };
 
-  document.getElementById('contas-tbody').innerHTML=lista.length?lista.map(x=>{
+  const listaShown=lista.slice(0,200);
+  document.getElementById('contas-tbody').innerHTML=listaShown.length?listaShown.map(x=>{
     const sc=sitCfg[x.sit]||sitCfg.ok;
     const numsHtml=x.peds.length===1
       ?`<span style="color:var(--or);font-weight:700">${x.peds[0].num}</span>`
@@ -11655,7 +11688,7 @@ function iniciarListenerSync(){
 }
 
 
-function migrarPedidosTrimestrais(){
+function migrarPedidosTrimestrais(){ // detecta docs mensais E trimestrais
   if(!window.db||!window.currentUser)return;
   const uid=window.currentUser.uid;
   const col=window.db.collection('lojas').doc(uid).collection('d');
@@ -11691,7 +11724,7 @@ function migrarPedidosTrimestrais(){
   col.get().then(function(snapshot){
     var qDocs=[], metaCli=null, metaFin=null, metaOp=null;
     snapshot.forEach(function(doc){
-      if(/^pedidos_\d{4}_Q\d$/.test(doc.id)) qDocs.push(doc);
+      if(/^pedidos_\d{4}_(\d{2}|Q\d)$/.test(doc.id)) qDocs.push(doc);
       if(doc.id==='meta_clientes') metaCli=doc;
       if(doc.id==='meta_fin')      metaFin=doc;
       if(doc.id==='meta_op')       metaOp=doc;
@@ -11740,6 +11773,17 @@ function migrarPedidosTrimestrais(){
         if(curPg==='dashboard')renderDash();
         else if(curPg==='pedidos')renderPedidos();
       }
+    }
+    // Limpa docs trimestrais antigos (Q1,Q2,Q3,Q4) se já existem docs mensais
+    var hasMonthly=qDocs.some(function(d){return /^pedidos_\d{4}_\d{2}$/.test(d.id);});
+    var hasQuarterly=qDocs.some(function(d){return /^pedidos_\d{4}_Q\d$/.test(d.id);});
+    if(hasMonthly&&hasQuarterly){
+      var toDelete=qDocs.filter(function(d){return /^pedidos_\d{4}_Q\d$/.test(d.id);});
+      toDelete.forEach(function(d){
+        col.doc(d.id).delete()
+          .then(function(){cmxLog('SYNC','Documento trimestral antigo removido',d.id);})
+          .catch(function(){});
+      });
     }
   }).catch(function(e){cmxLog('WARN','migrarPedidosTrimestrais falhou',(e&&e.message)||String(e));});
 }
