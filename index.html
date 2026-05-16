@@ -11692,28 +11692,80 @@ function migrarPedidosTrimestrais(){ // detecta docs mensais E trimestrais
   if(!window.db||!window.currentUser)return;
   const uid=window.currentUser.uid;
   const col=window.db.collection('lojas').doc(uid).collection('d');
-  // Busca todos os docs que existem na subcoleção d/
   col.get().then(function(snapshot){
-    var qDocs=[];
+    var monthlyDocs=[], quarterlyDocs=[], metaCli=null, metaFin=null, metaOp=null;
     snapshot.forEach(function(doc){
-      if(/^pedidos_\d{4}_Q\d$/.test(doc.id)){
-        qDocs.push(doc);
+      if(/^pedidos_\d{4}_\d{2}$/.test(doc.id)) monthlyDocs.push(doc);      // ex: pedidos_2026_05
+      else if(/^pedidos_\d{4}_Q\d$/.test(doc.id)) quarterlyDocs.push(doc); // ex: pedidos_2026_Q2 (legado)
+      if(doc.id==='meta_clientes') metaCli=doc;
+      if(doc.id==='meta_fin')      metaFin=doc;
+      if(doc.id==='meta_op')       metaOp=doc;
+    });
+
+    var mudou=false;
+
+    // PEDIDOS: usa mensais se existirem, senão usa trimestrais (nunca os dois juntos)
+    var docsParaUsar=monthlyDocs.length?monthlyDocs:quarterlyDocs;
+    if(docsParaUsar.length){
+      var allPeds=[];
+      docsParaUsar.forEach(function(doc){
+        try{allPeds=allPeds.concat(JSON.parse(doc.data().pedidos||'[]'));}catch(e){}
+      });
+      // Deduplica por ID (segurança extra)
+      var seen={};
+      allPeds=allPeds.filter(function(p){
+        if(!p.id||seen[p.id])return false;
+        seen[p.id]=true;return true;
+      });
+      if(allPeds.length>=DB.pedidos.length){
+        DB.pedidos=allPeds; mudou=true;
+        cmxLog('SYNC','Pedidos carregados',''+allPeds.length+' pedidos de '+docsParaUsar.length+' doc(s) mensais');
       }
-    });
-    if(!qDocs.length)return; // ainda no formato legado
-    var allPeds=[];
-    qDocs.forEach(function(doc){
-      try{allPeds=allPeds.concat(JSON.parse(doc.data().pedidos||'[]'));}catch(e){}
-    });
-    if(allPeds.length>=DB.pedidos.length){
-      DB.pedidos=allPeds;
-      localStorage.setItem(KEY,JSON.stringify(DB));
-      console.log('[MIGRAÇÃO] Carregados '+allPeds.length+' pedidos de '+qDocs.length+' trimestre(s)');
+      // Se existem mensais E trimestrais, deleta os trimestrais (migração automática)
+      if(monthlyDocs.length&&quarterlyDocs.length){
+        quarterlyDocs.forEach(function(d){
+          col.doc(d.id).delete()
+            .then(function(){cmxLog('SYNC','Doc trimestral removido automaticamente',d.id);})
+            .catch(function(){});
+        });
+      }
     }
-  }).catch(function(e){
-    // Silencioso - formato legado continua funcionando
-    console.log('[MIGRAÇÃO] Usando formato legado');
-  });
+
+    // META_CLIENTES
+    if(metaCli&&metaCli.exists){
+      try{DB.clientes=JSON.parse(metaCli.data().clientes||'[]');mudou=true;}catch(e){}
+    }
+    // META_FIN
+    if(metaFin&&metaFin.exists){
+      try{
+        const mf=metaFin.data();
+        if(mf.boletos)DB.boletos=JSON.parse(mf.boletos||'[]');
+        if(mf.despesas)DB.despesas=JSON.parse(mf.despesas||'[]');
+        mudou=true;
+      }catch(e){}
+    }
+    // META_OP
+    if(metaOp&&metaOp.exists){
+      try{
+        const mo=metaOp.data();
+        if(mo.fornecedores)DB.fornecedores=JSON.parse(mo.fornecedores||'[]');
+        if(mo.entradas)DB.entradas=JSON.parse(mo.entradas||'[]');
+        if(mo.devolucoes)DB.devolucoes=JSON.parse(mo.devolucoes||'[]');
+        if(mo.parceiros)DB.parceiros=JSON.parse(mo.parceiros||'[]');
+        if(mo.tarefas)DB.tarefas=JSON.parse(mo.tarefas||'[]');
+        if(mo.xmlMemoria)DB.xmlMemoria=JSON.parse(mo.xmlMemoria||'{}');
+        mudou=true;
+      }catch(e){}
+    }
+
+    if(mudou){
+      localStorage.setItem(KEY,JSON.stringify(DB));
+      if(typeof renderDash==='function'){
+        if(curPg==='dashboard')renderDash();
+        else if(curPg==='pedidos')renderPedidos();
+      }
+    }
+  }).catch(function(e){cmxLog('WARN','migrarPedidosTrimestrais falhou',(e&&e.message)||String(e));});
 }
 
 function migrarPedidosTrimestrais(){
