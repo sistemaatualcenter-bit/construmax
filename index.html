@@ -2311,6 +2311,16 @@ function renderLogViewer(){
   +'</div>';
 }
 
+function markDirty(colecao){
+  if(!window._cmxDirty)window._cmxDirty={};
+  if(colecao==='pedidos'){
+    // Marca os meses dos pedidos recentemente modificados
+    window._cmxDirty.pedidosMeses=getPedidosDocKeys();
+  } else {
+    window._cmxDirty[colecao]=true;
+  }
+}
+
 function saveDB(){
   const dados = JSON.stringify(DB);
   const ts = Date.now();
@@ -2408,28 +2418,42 @@ function salvarNaNuvem(ts){
     tarefas:JSON.stringify(DB.tarefas||[]),
     xmlMemoria:JSON.stringify(DB.xmlMemoria||{}),
   };
-  // Writes SEQUENCIAIS por trimestre — escala indefinidamente
+  // Escrita SELETIVA: só grava o que mudou desde o último save
   const col = window.db.collection('lojas').doc(uid).collection('d');
   const qKeys=Object.keys(pedsByQ);
-  // Escreve meta primeiro, depois produtos, depois cada trimestre em sequência
-  var chain=col.doc('meta').set(meta)
-    .then(function(){return col.doc('meta_clientes').set(metaClientes);})
-    .then(function(){return col.doc('meta_fin').set(metaFin);})
-    .then(function(){return col.doc('meta_op').set(metaOp);})
-    .then(function(){return col.doc('produtos').set({ts:timestamp,produtos:JSON.stringify(DB.produtos||[])});});
-  qKeys.forEach(function(k){
-    chain=chain.then(function(){
-      return col.doc(k).set({ts:timestamp,pedidos:JSON.stringify(pedsByQ[k])});
-    });
+  const dirty=window._cmxDirty||{all:true};
+
+  // Monta lista de writes necessários
+  var writes=[];
+  if(dirty.all||dirty.meta)
+    writes.push(function(){return col.doc('meta').set(meta);});
+  if(dirty.all||dirty.clientes)
+    writes.push(function(){return col.doc('meta_clientes').set(metaClientes);});
+  if(dirty.all||dirty.fin)
+    writes.push(function(){return col.doc('meta_fin').set(metaFin);});
+  if(dirty.all||dirty.op)
+    writes.push(function(){return col.doc('meta_op').set(metaOp);});
+  if(dirty.all||dirty.produtos)
+    writes.push(function(){return col.doc('produtos').set({ts:timestamp,produtos:JSON.stringify(DB.produtos||[])});});
+  // Pedidos: só escreve os meses que mudaram
+  var dirtyMonths=dirty.all?qKeys:(dirty.pedidosMeses||qKeys);
+  dirtyMonths.forEach(function(k){
+    if(pedsByQ[k])
+      writes.push(function(){return col.doc(k).set({ts:timestamp,pedidos:JSON.stringify(pedsByQ[k])});});
   });
+
+  // Executa writes em sequência
+  var chain=Promise.resolve();
+  writes.forEach(function(fn){chain=chain.then(fn);});
   chain.then(function(){
+    window._cmxDirty={};  // limpa flags após save bem-sucedido
     _ultimoTsNuvem=timestamp;
     _firebaseSavePending=false;
     _nuvemSaving=false;
     showSI('saved');
-    cmxLog('FIREBASE','Salvo com sucesso',''+peds.length+' pedidos em '+qKeys.length+' trimestre(s), ts='+timestamp);
+    cmxLog('FIREBASE','Salvo',''+writes.length+' doc(s), '+peds.length+' pedidos');
   }).catch(function(e){
-    cmxLog('ERROR','Erro ao salvar no Firebase',(e.code||'')+' '+( e.message||''));
+    cmxLog('ERROR','Erro ao salvar no Firebase',(e.code||'')+' '+(e.message||''));
     _firebaseSavePending=false;
     _nuvemSaving=false;
     showSI('saved');
@@ -2674,6 +2698,7 @@ function toggleCrit(){
 }
 let _valoresOcultos=false;
 let _pendingSave=false; // flag: evita que listener sobrescreva dados locais não salvos
+window._cmxDirty={all:true}; // quais coleções precisam ser salvas no Firebase
 let _firebaseSavePending=false; // flag: Firebase ainda não confirmou o save
 function toggleOcultarValores(){
   _valoresOcultos=!_valoresOcultos;
@@ -3179,7 +3204,7 @@ function salvarCliente(){
   // Salva registro individual no Firestore (evita sobrescrita de outros clientes)
   const cliData=DB.clientes.find(c=>c.id===cliId);
   if(cliData)salvarRegistro('clientes',cliId,cliData);
-  saveDB();closeMD('cli');renderClientes();
+  markDirty('clientes');saveDB();closeMD('cli');renderClientes();
 }
 function delCliente(id){
   // Verifica vínculos antes de excluir
@@ -3825,7 +3850,7 @@ function salvarDoc(){
     DB.pedidos=DB.pedidos.map(p=>p.id===editId?{...p,...doc,id:editId,num:p.num,st:p.st}:p);
     document.getElementById('mdoc-tipo').dataset.editId='';
     limparRascunho(tipo);
-    saveDB();closeMD('doc');renderOrcamentos();
+    markDirty('pedidos');markDirty('meta');saveDB();closeMD('doc');renderOrcamentos();
     toast('✓ Orçamento atualizado!');
     return;
   }
@@ -5266,7 +5291,7 @@ function salvarProduto(){
   // Salva registro individual no Firestore
   const prodData=DB.produtos.find(p=>p.id===prodId);
   if(prodData)salvarRegistro('produtos',prodId,prodData);
-  saveDB();closeMD('prd');renderProdutos();
+  markDirty('produtos');saveDB();closeMD('prd');renderProdutos();
 }
 function delProduto(id){
   // Verifica vínculos antes de excluir
@@ -5697,7 +5722,7 @@ function salvarFornecedor(){
   else{DB.fornecedores.push({...obj,id:uid(),dt:hj()});toast('✓ Fornecedor cadastrado');}
   const _fid=document.getElementById('mf-id').value||_newFid;
 const _fd=DB.fornecedores.find(f=>f.id===_fid);if(_fd)salvarRegistro('fornecedores',_fid,_fd);
-  saveDB();closeMD('for');renderFornecedores();
+  markDirty('op');saveDB();closeMD('for');renderFornecedores();
 }
 function delFornecedor(id){
   // Verifica vínculos antes de excluir
@@ -5797,7 +5822,7 @@ function salvarParceiro(){
   const _pid2=document.getElementById('mpar-id').value;
 const _pd=DB.parceiros.find(p=>p.id===(_pid2||''));
 if(_pd)salvarRegistro('parceiros',_pd.id,_pd);
-  saveDB();closeMD('parceiro');renderParceiros();
+  markDirty('op');saveDB();closeMD('parceiro');renderParceiros();
 }
 function delParceiro(id){
   const p=DB.parceiros.find(x=>x.id===id);
@@ -6181,7 +6206,7 @@ function salvarBoleto(){
   const _bid=document.getElementById('mb-id')?.value||'';
 const _bd=DB.boletos.find(b=>b.id===(_bid||''));
 if(_bd)salvarRegistro('boletos',_bd.id,_bd);
-  saveDB();closeMD('boleto');renderContasPagar();
+  markDirty('fin');saveDB();closeMD('boleto');renderContasPagar();
 }
 function delBoleto(id){
   if(!confirm('Remover este boleto?'))return;
@@ -7443,7 +7468,7 @@ function salvarEntrada(){
     toast('✓ Entrada registrada! Estoque atualizado.');
   }
   nfItens=[];
-  saveDB();closeMD('ent');renderEntradas();renderEstoque();
+  markDirty('op');saveDB();closeMD('ent');renderEntradas();renderEstoque();
 }
 function delEntrada(id){if(!confirm('Remover?'))return;DB.entradas=DB.entradas.filter(e=>e.id!==id);deletarRegistro('entradas',id);
   saveDB();renderEntradas();toast('Removida','#ef4444');}
@@ -7774,7 +7799,7 @@ function salvarDespesa(){
   const _did=document.getElementById('md-desp-id')?.value||'';
 const _dd=DB.despesas.find(d=>d.id===(_did||''));
 if(_dd)salvarRegistro('despesas',_dd.id,_dd);
-  saveDB();closeMD('despesa');renderDespesas();
+  markDirty('fin');saveDB();closeMD('despesa');renderDespesas();
 }
 function gerarParcelasFixas(d){
   // Gera lançamentos mensais por 12 meses a partir do vencimento
@@ -10161,7 +10186,7 @@ function salvarDevolucao(){
   DB.devolucoes.push(dev);DB.seq.dev++;
   itens.forEach(it=>{DB.produtos=DB.produtos.map(p=>p.id===it.pid?{...p,est:p.est+it.qtdDev}:p);});
   DB.pedidos=DB.pedidos.map(pd=>pd.id===pedId?{...pd,temDevolucao:true}:pd);
-  saveDB();closeMD('dev');renderDevolucoes();toast('✓ Devolução '+numDev+' registrada!');
+  markDirty('op');saveDB();closeMD('dev');renderDevolucoes();toast('✓ Devolução '+numDev+' registrada!');
 }
 function usarCredito(id){
   const dev=DB.devolucoes.find(d=>d.id===id);if(!dev)return;
@@ -11525,7 +11550,7 @@ function finalizarComanda(){
   },4000);
 
   // Salva localmente + Firebase via debounce (1.5s)
-  saveDB();
+  markDirty('pedidos');markDirty('produtos');saveDB();
   salvarRegistro('pedidos',doc.id,doc);
   // Não cancela o debounce - deixa salvarNaNuvem usar o ts correto do saveDB
 
