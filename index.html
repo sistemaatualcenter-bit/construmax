@@ -4564,8 +4564,8 @@ function renderPedidos(){
   const elIni=document.getElementById('fil-ped-ini');
   const elFim=document.getElementById('fil-ped-fim');
   // Default: filtra pelo dia de hoje para performance (76x mais rápido)
-  if(elIni&&!elIni.value) elIni.value=hj();
-  if(elFim&&!elFim.value) elFim.value=hj();
+  if(elIni&&!elIni.value) elIni.value=dtHtml();
+  if(elFim&&!elFim.value) elFim.value=dtHtml();
   const ini=elIni?.value||'';
   const fim=elFim?.value||'';
   // Grupos de status para o filtro simplificado
