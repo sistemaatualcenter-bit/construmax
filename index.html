@@ -2659,7 +2659,17 @@ function go(pg){
   }[pg]||function(){})();
 }
 function openMD(id){document.getElementById('mo').style.display='flex';document.getElementById('md-'+id).style.display='block';}
-function closeMD(id){document.getElementById('md-'+id).style.display='none';document.getElementById('mo').style.display='none';}
+function closeMD(id){
+  document.getElementById('md-'+id).style.display='none';
+  // Se verDoc foi aberto da ficha do cliente, volta para ela
+  if(id==='ver'&&_verDocFromCli){
+    const cliId=_verDocFromCli;
+    _verDocFromCli=null;
+    fichaCliente(cliId);
+    return;
+  }
+  document.getElementById('mo').style.display='none';
+}
 function moCloseBd(e){
   if(e.target===document.getElementById('mo')){
     // Não fecha modal de pedido/orçamento, entrada/NF nem XML ao clicar fora
@@ -3149,22 +3159,30 @@ function fichaCliente(id){
     renderFichaCliente(id);
   });
 }
-function renderFichaCliente(id){
+function renderFichaCliente(id,filtSt){
   if(!id)return;
   const c=DB.clientes.find(x=>x.id===id);if(!c)return;
-  const peds=DB.pedidos.filter(d=>d.cliId===id).sort((a,b)=>b.num.localeCompare(a.num));
-  const total=peds.filter(d=>isAtivo(d)&&d.tipo==='ped').reduce((s,d)=>s+d.total,0);
-  const lucro=peds.filter(d=>isAtivo(d)&&d.tipo==='ped').reduce((s,d)=>s+docLucroFil(d,'com'),0);
-  const aRec=peds.filter(d=>isAtivo(d)&&d.tipo==='ped'&&docSaldo(d)>0).reduce((s,d)=>s+docSaldo(d),0);
+  const todosOsPeds=DB.pedidos.filter(d=>d.cliId===id).sort((a,b)=>b.num.localeCompare(a.num));
+  const filtro=filtSt||'todos';
+  const peds=todosOsPeds.filter(d=>{
+    if(filtro==='aberto') return isAtivo(d)&&d.tipo==='ped'&&docSaldo(d)>0;
+    if(filtro==='pago')   return d.tipo==='ped'&&docSaldo(d)<=0&&d.st!=='cancelado';
+    return true;
+  });
+  const total=todosOsPeds.filter(d=>isAtivo(d)&&d.tipo==='ped').reduce((s,d)=>s+d.total,0);
+  const lucro=todosOsPeds.filter(d=>isAtivo(d)&&d.tipo==='ped').reduce((s,d)=>s+docLucroFil(d,'com'),0);
+  const aRec=todosOsPeds.filter(d=>isAtivo(d)&&d.tipo==='ped'&&docSaldo(d)>0).reduce((s,d)=>s+docSaldo(d),0);
   const credAberto=DB.devolucoes.filter(d=>d.cliId===id&&d.creditoStatus==='aberto').reduce((s,d)=>s+d.valorTotal,0);
   const rec=calcRecorrencia(id);
-  const recHtml=rec?`
-    <div style="background:var(--card2);border-radius:9px;padding:10px 14px;margin-bottom:12px;display:flex;gap:16px;flex-wrap:wrap;align-items:center">
-      <span style="background:${rec.sitBg};color:${rec.sitC};padding:3px 10px;border-radius:7px;font-size:12px;font-weight:800">${rec.sit}</span>
-      <span style="font-size:12px;color:var(--mt)">📦 <strong style="color:var(--tx)">${rec.numPeds}</strong> pedido(s)</span>
-      <span style="font-size:12px;color:var(--mt)">🕐 Última compra: <strong style="color:${rec.sitC}">${rec.diasUlt===0?'hoje':rec.diasUlt+'d atrás'}</strong></span>
-      ${rec.mediaDias!==null?`<span style="font-size:12px;color:var(--mt)">📅 Média entre compras: <strong style="color:var(--tx)">${rec.mediaDias}d</strong></span>`:''}
-    </div>`:'';
+  const recHtml=rec?`<div style="background:var(--card2);border-radius:9px;padding:10px 14px;margin-bottom:12px;display:flex;gap:16px;flex-wrap:wrap;align-items:center"><span style="background:${rec.sitBg};color:${rec.sitC};padding:3px 10px;border-radius:7px;font-size:12px;font-weight:800">${rec.sit}</span><span style="font-size:12px;color:var(--mt)">📦 <strong style="color:var(--tx)">${rec.numPeds}</strong> pedido(s)</span><span style="font-size:12px;color:var(--mt)">🕐 Última compra: <strong style="color:${rec.sitC}">${rec.diasUlt===0?'hoje':rec.diasUlt+'d atrás'}</strong></span>${rec.mediaDias!==null?`<span style="font-size:12px;color:var(--mt)">📅 Média entre compras: <strong style="color:var(--tx)">${rec.mediaDias}d</strong></span>`:''}</div>`:'';
+  const nAberto=todosOsPeds.filter(d=>isAtivo(d)&&d.tipo==='ped'&&docSaldo(d)>0).length;
+  const nPago=todosOsPeds.filter(d=>d.tipo==='ped'&&docSaldo(d)<=0&&d.st!=='cancelado').length;
+  const btnFil=(val,label,cor)=>`<button onclick="renderFichaCliente('${id}','${val}')" style="padding:5px 14px;border-radius:20px;border:none;cursor:pointer;font-size:12px;font-weight:700;background:${filtro===val?cor:'var(--card2)'};color:${filtro===val?'#fff':'var(--tx)'}">${label}</button>`;
+  const filHtml=`<div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap">
+    ${btnFil('todos','Todos ('+todosOsPeds.length+')','#6366f1')}
+    ${btnFil('aberto','⏳ Em Aberto ('+nAberto+')','#ef4444')}
+    ${btnFil('pago','✅ Pagos ('+nPago+')','#10b981')}
+  </div>`;
   document.getElementById('mc-ficha-content').innerHTML=`
     <div class="ficha-header">
       <div class="ficha-avatar" style="background:linear-gradient(135deg,#f97316,#ea580c);color:#fff">${c.nome.charAt(0).toUpperCase()}</div>
@@ -3178,10 +3196,20 @@ function renderFichaCliente(id){
     <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px">
       ${[['Total Compras',fmt(total),'#f97316'],['Lucro Gerado',fmt(lucro),'#10b981'],['A Receber',fmt(aRec),'#ef4444'],['Crédito Dev.',fmt(credAberto),'#f59e0b']].map(([l,v,cor])=>`<div style="background:var(--card2);border-radius:8px;padding:10px;text-align:center"><div style="font-family:'Barlow Condensed',sans-serif;font-size:19px;font-weight:800;color:${cor}">${v}</div><div style="font-size:11px;color:var(--mt)">${l}</div></div>`).join('')}
     </div>
-    ${peds.length?`<div class="tw"><table><thead><tr><th>Nº</th><th>Data</th><th>Pgto</th><th>Total</th><th>Pago</th><th>Status</th></tr></thead><tbody>${
-      peds.map(d=>`<tr><td style="color:${d.tipo==='orc'?'var(--yw)':'var(--or)'};font-weight:700">${d.num}</td><td>${d.dt}</td><td style="text-transform:capitalize;font-size:11.5px">${d.pag}</td><td>${fmt(d.total)}</td><td style="color:var(--gn)">${fmt(docPago(d))}</td><td>${tgSt(d.st)}</td></tr>`).join('')
-    }</tbody></table></div>`:`<div class="es">Nenhum documento</div>`}`;
+    ${filHtml}
+    ${peds.length?`<div class="tw"><table><thead><tr><th>Nº</th><th>Data</th><th>Pgto</th><th>Total</th><th>Pago</th><th>Saldo</th><th>Status</th></tr></thead><tbody>${
+      peds.map(d=>`<tr style="cursor:pointer" onclick="verDoc('${d.id}',false,'${id}')" onmouseover="this.style.background='var(--card2)'" onmouseout="this.style.background=''" title="Clique para abrir o pedido">
+        <td style="color:${d.tipo==='orc'?'var(--yw)':'var(--or)'};font-weight:700">${d.num} 🔗</td>
+        <td>${d.dt}</td>
+        <td style="text-transform:capitalize;font-size:11.5px">${d.pag}</td>
+        <td>${fmt(d.total)}</td>
+        <td style="color:var(--gn)">${fmt(docPago(d))}</td>
+        <td style="color:${docSaldo(d)>0?'#ef4444':'var(--gn)'};font-weight:${docSaldo(d)>0?'700':'400'}">${docSaldo(d)>0?fmt(docSaldo(d)):'-'}</td>
+        <td>${tgSt(d.st)}</td>
+      </tr>`).join('')
+    }</tbody></table></div>`:`<div class="es">Nenhum pedido neste filtro</div>`}`;
 }
+
 function salvarCliente(){
   const nome=document.getElementById('mc-nome').value.trim();
   if(!nome){toast('⚠ Informe o nome','#f59e0b');return;}
@@ -3246,7 +3274,7 @@ if(_newCliId){const _nc=DB.clientes.find(c=>c.id===_newCliId);if(_nc)salvarRegis
 // ═══════════════════════════════════════════════════════
 // DOCUMENTOS (ORC + PED)
 // ═══════════════════════════════════════════════════════
-let docItens=[],descTipoAtual='R$',docIdSelecionado=null;
+let docItens=[],descTipoAtual='R$',docIdSelecionado=null,_verDocFromCli=null;
 function setDescTipo(t){
   descTipoAtual=t;
   document.getElementById('desc-btn-r').classList.toggle('on',t==='R$');
@@ -3883,7 +3911,8 @@ function salvarDoc(){
 }
 
 // VER DOCUMENTO
-function verDoc(id,fromEntregas){
+function verDoc(id,fromEntregas,fromCli){
+  _verDocFromCli=fromCli||null;
   docIdSelecionado=id;
   const d=DB.pedidos.find(x=>x.id===id);if(!d)return;
   const isPed=d.tipo==='ped';
