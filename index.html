@@ -2646,6 +2646,7 @@ function go(pg){
   const p=document.getElementById('pg-'+pg);if(p)p.classList.add('active');
   const n=document.getElementById('nav-'+pg);if(n)n.classList.add('active');
   curPg=pg;
+  _verDocFromCli=null; // limpa contexto ao navegar
   ({
     dashboard:renderDash,clientes:renderClientes,orcamentos:renderOrcamentos,
     pedidos:renderPedidos,produtos:renderProdutos,estoque:renderEstoque,
@@ -2658,7 +2659,14 @@ function go(pg){
     'cadastro-massa':renderCadMassa,
   }[pg]||function(){})();
 }
-function openMD(id){document.getElementById('mo').style.display='flex';document.getElementById('md-'+id).style.display='block';}
+function openMD(id){
+  // Fecha outros modais antes de abrir o novo (evita sobreposição)
+  document.querySelectorAll('.md').forEach(function(m){
+    if(m.id!=='md-'+id) m.style.display='none';
+  });
+  document.getElementById('mo').style.display='flex';
+  document.getElementById('md-'+id).style.display='block';
+}
 function closeMD(id){
   document.getElementById('md-'+id).style.display='none';
   // Se verDoc foi aberto da ficha do cliente, volta para ela
@@ -2685,6 +2693,7 @@ function moCloseBd(e){
     }
     document.getElementById('mo').style.display='none';
     document.querySelectorAll('.md').forEach(m=>m.style.display='none');
+    _verDocFromCli=null; // limpa contexto de navegação
   }
 }
 // mantém compatibilidade com chamadas antigas
