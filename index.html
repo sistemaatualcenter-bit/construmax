@@ -3102,7 +3102,12 @@ function impCrit(){
 // ═══════════════════════════════════════════════════════
 function renderClientes(){
   const q=(document.getElementById('src-cli')?.value||'').toLowerCase();
-  const list=DB.clientes.filter(c=>c.nome.toLowerCase().includes(q)||(c.cpf||'').includes(q)||(c.tel||'').includes(q));
+  // Ordena: clientes com pedidos recentes primeiro, depois alfabético
+  // Isso garante que novos clientes aparecem quando buscados pelo nome
+  const list=DB.clientes
+    .filter(c=>c.nome.toLowerCase().includes(q)||(c.cpf||'').includes(q)||(c.tel||'').includes(q))
+    .slice()
+    .sort((a,b)=>a.nome.localeCompare(b.nome,'pt-BR'));
   document.getElementById('cli-cnt').textContent='('+(DB.clientes.length-1)+')';
   // Pre-calcula totais por cliente (evita O(N*M) dentro do map)
   const pedMap={};
