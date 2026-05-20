@@ -2348,8 +2348,11 @@ function saveDB(){
   _nuvemTimer=setTimeout(function(){
     _nuvemTimer=null;
     if(_nuvemSaving){
-      // Write em andamento - reagenda para após completar
-      _nuvemTimer=setTimeout(function(){_nuvemTimer=null;salvarNaNuvem(ts);},4000);
+      // Write em andamento - reagenda com ts fresco
+      _nuvemTimer=setTimeout(function(){
+        _nuvemTimer=null;
+        salvarNaNuvem(parseInt(localStorage.getItem(KEY+'_ts')||Date.now()));
+      },4000);
       return;
     }
     salvarNaNuvem(ts);
@@ -2424,9 +2427,8 @@ function salvarNaNuvem(ts){
   const dirty=window._cmxDirty||{all:true};
 
   // Monta lista de writes necessários
-  var writes=[];
-  if(dirty.all||dirty.meta)
-    writes.push(function(){return col.doc('meta').set(meta);});
+  // meta SEMPRE escrito (contém ts crítico para sincronização entre dispositivos)
+  var writes=[function(){return col.doc('meta').set(meta);}];
   if(dirty.all||dirty.clientes)
     writes.push(function(){return col.doc('meta_clientes').set(metaClientes);});
   if(dirty.all||dirty.fin)
