@@ -11954,8 +11954,26 @@ function initApp(){
   iniciarAutoBackup();
 }
 
+let _ultimoHashBackup=''; // hash do último backup baixado
+
+function calcHashDB(){
+  // Hash simples e rápido: quantidade de pedidos + total de todos + último pedido id
+  const peds=DB.pedidos||[];
+  const total=peds.reduce(function(s,p){return s+(p.total||0);},0);
+  const ultimoId=peds.length?peds[peds.length-1].id:'';
+  const nPrds=(DB.produtos||[]).length;
+  const nClis=(DB.clientes||[]).length;
+  return peds.length+'|'+Math.round(total)+'|'+ultimoId+'|'+nPrds+'|'+nClis;
+}
+
 function baixarBackupAuto(){
   try{
+    // Verifica se houve alteração desde o último backup
+    const hashAtual=calcHashDB();
+    if(hashAtual===_ultimoHashBackup){
+      cmxLog('INFO','Backup automático ignorado — nenhuma alteração detectada','');
+      return;
+    }
     const agora=new Date();
     const pad=function(n){return String(n).padStart(2,'0');};
     const nome='backup-construmax-'
@@ -11975,8 +11993,9 @@ function baixarBackupAuto(){
     a.click();
     document.body.removeChild(a);
     setTimeout(function(){URL.revokeObjectURL(url);},5000);
-    toast('💾 Backup automático baixado: '+nome,'#10b981');
-    console.log('[BACKUP] Download automático: '+nome);
+    _ultimoHashBackup=hashAtual; // atualiza hash após backup
+    toast('💾 Backup automático: '+nome,'#10b981');
+    cmxLog('INFO','Backup automático baixado',nome);
   }catch(e){
     console.warn('[BACKUP] Erro no backup automático:',e);
   }
