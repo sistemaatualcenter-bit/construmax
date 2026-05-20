@@ -2439,7 +2439,9 @@ function salvarNaNuvem(ts){
   var dirtyMonths=dirty.all?qKeys:(dirty.pedidosMeses||qKeys);
   dirtyMonths.forEach(function(k){
     if(pedsByQ[k])
-      writes.push(function(){return col.doc(k).set({ts:timestamp,pedidos:JSON.stringify(pedsByQ[k])});});
+      writes.push((function(key){  // IIFE captura 'key' por valor (evita bug de closure em loop)
+        return function(){return col.doc(key).set({ts:timestamp,pedidos:JSON.stringify(pedsByQ[key])});};
+      })(k));
   });
 
   // Executa writes em sequência
