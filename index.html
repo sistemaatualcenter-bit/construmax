@@ -2342,6 +2342,10 @@ function saveDB(){
   }
   _firebaseSavePending=true;
   showSI('pending');
+  // Se não houver markDirty específico, marca all=true (escreve tudo — seguro)
+  if(!window._cmxDirty||Object.keys(window._cmxDirty).length===0){
+    window._cmxDirty={all:true};
+  }
   cmxLog('INFO','saveDB executado','localPeds='+DB.pedidos.length+' localProds='+DB.produtos.length);
   // Debounce 4s: agrupa saves consecutivos em um único write no Firebase
   if(_nuvemTimer) clearTimeout(_nuvemTimer);
@@ -2457,10 +2461,23 @@ function salvarNaNuvem(ts){
     showSI('saved');
     cmxLog('FIREBASE','Salvo',''+writes.length+' doc(s), '+peds.length+' pedidos');
   }).catch(function(e){
-    cmxLog('ERROR','Erro ao salvar no Firebase',(e.code||'')+' '+(e.message||''));
+    const code=e.code||'';
+    const msg=(e.message||'').toLowerCase();
+    const isNetwork=msg.includes('transport')||msg.includes('network')||
+                    msg.includes('stream')||code==='unavailable';
+    cmxLog(isNetwork?'WARN':'ERROR',
+           isNetwork?'Falha de rede — retry em 8s':'Erro ao salvar no Firebase',
+           (code||'')+' '+(e.message||''));
     _firebaseSavePending=false;
     _nuvemSaving=false;
     showSI('saved');
+    // Retry automático apenas para erros de rede (não para erros permanentes)
+    if(isNetwork&&!_nuvemTimer){
+      setTimeout(function(){
+        cmxLog('INFO','Tentando salvar novamente após falha de rede','');
+        saveDB();
+      },8000);
+    }
   });
 }
 function showSI(estado){
