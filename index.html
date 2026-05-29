@@ -2381,6 +2381,15 @@ function getPedidosDocKeys(){
   return Array.from(keys);
 }
 
+// Hashes dos últimos saves para evitar writes desnecessários
+window._lastHashes=window._lastHashes||{};
+function quickHash(str){
+  // Hash simples e rápido para comparar strings
+  var h=0;
+  for(var i=0;i<Math.min(str.length,500);i++) h=(h*31+str.charCodeAt(i))&0xffffffff;
+  return h+'_'+str.length;
+}
+
 function salvarNaNuvem(ts){
   if(!window.db || !window.currentUser) return;
   if(_nuvemSaving){console.log('[FIREBASE] write em andamento, aguardando...');return;}
@@ -2431,16 +2440,27 @@ function salvarNaNuvem(ts){
   const dirty=window._cmxDirty||{all:true};
 
   // Monta lista de writes necessários
-  // meta SEMPRE escrito (contém ts crítico para sincronização entre dispositivos)
+  // meta SEMPRE escrito (contém ts crítico para sincronização)
   var writes=[function(){return col.doc('meta').set(meta);}];
-  if(dirty.all||dirty.clientes)
+
+  // Outros docs: só escreve se o conteúdo mudou (hash diferente do último save)
+  var hCli=quickHash(metaClientes.clientes||'');
+  if((dirty.all||dirty.clientes)&&hCli!==window._lastHashes.clientes){
     writes.push(function(){return col.doc('meta_clientes').set(metaClientes);});
-  if(dirty.all||dirty.fin)
+  }
+  var hFin=quickHash((metaFin.boletos||'')+(metaFin.despesas||''));
+  if((dirty.all||dirty.fin)&&hFin!==window._lastHashes.fin){
     writes.push(function(){return col.doc('meta_fin').set(metaFin);});
-  if(dirty.all||dirty.op)
+  }
+  var hOp=quickHash((metaOp.fornecedores||'')+(metaOp.entradas||'').slice(0,200));
+  if((dirty.all||dirty.op)&&hOp!==window._lastHashes.op){
     writes.push(function(){return col.doc('meta_op').set(metaOp);});
-  if(dirty.all||dirty.produtos)
-    writes.push(function(){return col.doc('produtos').set({ts:timestamp,produtos:JSON.stringify(DB.produtos||[])});});
+  }
+  var prodStr=JSON.stringify(DB.produtos||[]);
+  var hPrd=quickHash(prodStr);
+  if((dirty.all||dirty.produtos)&&hPrd!==window._lastHashes.produtos){
+    writes.push(function(){return col.doc('produtos').set({ts:timestamp,produtos:prodStr});});
+  }
   // Pedidos: só escreve os meses que mudaram
   var dirtyMonths=dirty.all?qKeys:(dirty.pedidosMeses||qKeys);
   dirtyMonths.forEach(function(k){
@@ -2455,6 +2475,11 @@ function salvarNaNuvem(ts){
   writes.forEach(function(fn){chain=chain.then(fn);});
   chain.then(function(){
     window._cmxDirty={};  // limpa flags após save bem-sucedido
+    // Atualiza hashes para evitar reescritas desnecessárias
+    window._lastHashes.clientes=quickHash(metaClientes.clientes||'');
+    window._lastHashes.fin=quickHash((metaFin.boletos||'')+(metaFin.despesas||''));
+    window._lastHashes.op=quickHash((metaOp.fornecedores||'')+(metaOp.entradas||'').slice(0,200));
+    window._lastHashes.produtos=quickHash(JSON.stringify(DB.produtos||[]));
     _ultimoTsNuvem=timestamp;
     _firebaseSavePending=false;
     _nuvemSaving=false;
