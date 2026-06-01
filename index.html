@@ -2356,11 +2356,11 @@ function saveDB(){
       _nuvemTimer=setTimeout(function(){
         _nuvemTimer=null;
         salvarNaNuvem(parseInt(localStorage.getItem(KEY+'_ts')||Date.now()));
-      },4000);
+      },6000);
       return;
     }
     salvarNaNuvem(ts);
-  },4000);
+  },6000);
 }
 
 // ── Helper: retorna chave do documento por MÊS (evita limite 1MB do Firestore) ──
@@ -11835,14 +11835,8 @@ function migrarPedidosTrimestrais(){ // detecta docs mensais E trimestrais
         DB.pedidos=allPeds; mudou=true;
         cmxLog('SYNC','Pedidos carregados',''+allPeds.length+' pedidos de '+docsParaUsar.length+' doc(s) mensais');
       }
-      // Se existem mensais E trimestrais, deleta os trimestrais (migração automática)
-      if(monthlyDocs.length&&quarterlyDocs.length){
-        quarterlyDocs.forEach(function(d){
-          col.doc(d.id).delete()
-            .then(function(){cmxLog('SYNC','Doc trimestral removido automaticamente',d.id);})
-            .catch(function(){});
-        });
-      }
+      // Docs trimestrais antigos são ignorados (mensais têm prioridade)
+      // Não deletamos para evitar writes extras que causam resource-exhausted
     }
 
     // META_CLIENTES
@@ -11962,18 +11956,7 @@ function initApp(){
   });
   loadDB();
   migrarPedidosTrimestrais();
-  // Inicializa contadores atômicos no Firebase com valores locais (se ainda não existirem)
-  if(window.db&&window.currentUser){
-    const ref=window.db.collection('lojas').doc(window.currentUser.uid);
-    ref.get().then(function(doc){
-      const upd={};
-      const cloudPed=doc.exists&&doc.data().seq_ped?doc.data().seq_ped:0;
-      const cloudOrc=doc.exists&&doc.data().seq_orc?doc.data().seq_orc:0;
-      if(DB.seq.ped>cloudPed)upd.seq_ped=DB.seq.ped;
-      if(DB.seq.orc>cloudOrc)upd.seq_orc=DB.seq.orc;
-      if(Object.keys(upd).length>0)ref.set(upd,{merge:true});
-    }).catch(function(e){cmxLog('WARN','Seq sync Firebase falhou',(e&&e.message)||String(e));});
-  }
+  // seq é salvo no meta doc via saveDB() - não precisa de sync separado
   setCatFil('com'); // inicializa labels COM/SEM após scripts carregados
   go('dashboard');
   const sbFoot=document.querySelector('.sb-foot');
