@@ -3478,7 +3478,11 @@ function abrirDoc(tipo){
       if(tsFirebase>=tsLocal&&metaDoc.exists){
         try{
           const m=metaDoc.data();
-          if(m.clientes)DB.clientes=JSON.parse(m.clientes);
+          if(m.clientes){
+            var sc=JSON.parse(m.clientes||'[]');
+            // Só substitui se Firebase tem >= clientes (proteção anti-perda)
+            if(sc.length>=DB.clientes.length) DB.clientes=sc;
+          }
           if(m.seq){const s=JSON.parse(m.seq);DB.seq=s;}
           const p1=ped1Doc.exists?JSON.parse(ped1Doc.data().pedidos||'[]'):[];
           const p2=ped2Doc.exists?JSON.parse(ped2Doc.data().pedidos||'[]'):[];
@@ -11854,9 +11858,17 @@ function migrarPedidosTrimestrais(){ // detecta docs mensais E trimestrais
       // Não deletamos para evitar writes extras que causam resource-exhausted
     }
 
-    // META_CLIENTES
-    if(metaCli&&metaCli.exists){
-      try{DB.clientes=JSON.parse(metaCli.data().clientes||'[]');mudou=true;}catch(e){}
+    // META_CLIENTES — só carrega se Firebase for mais recente que local
+    var tsLocalCli=parseInt(localStorage.getItem(KEY+'_ts')||'0');
+    var tsFireCli=metaCli&&metaCli.exists?(metaCli.data().ts||0):0;
+    if(metaCli&&metaCli.exists&&tsFireCli>=tsLocalCli&&!_firebaseSavePending&&!_nuvemSaving){
+      try{
+        var fbClis=JSON.parse(metaCli.data().clientes||'[]');
+        // Só substitui se Firebase tem >= clientes que local (proteção anti-perda)
+        if(fbClis.length>=DB.clientes.length){
+          DB.clientes=fbClis;mudou=true;
+        }
+      }catch(e){}
     }
     // META_FIN
     if(metaFin&&metaFin.exists){
