@@ -311,7 +311,7 @@ select.inp option{background:var(--card2)}
   <div class="ph">
     <div class="pt">Clientes <span id="cli-cnt"></span></div>
     <div class="ha">
-      <div class="sb2"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg><input placeholder="Buscar..." id="src-cli" oninput="renderClientes()"></div>
+      <div class="sb2"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg><input placeholder="Buscar..." id="src-cli" oninput="window._cliPage=0;renderClientes()"></div>
       <button class="btn bp" onclick="abrirCliente()">+ Novo Cliente</button>
     </div>
   </div>
@@ -3146,7 +3146,8 @@ function impCrit(){
 // ═══════════════════════════════════════════════════════
 // CLIENTES
 // ═══════════════════════════════════════════════════════
-function renderClientes(){
+function renderClientes(resetPage){
+  if(resetPage)window._cliPage=0;
   const q=(document.getElementById('src-cli')?.value||'').toLowerCase();
   // Ordena: clientes com pedidos recentes primeiro, depois alfabético
   // Isso garante que novos clientes aparecem quando buscados pelo nome
@@ -3163,9 +3164,13 @@ function renderClientes(){
     pedMap[d.cliId].aRec+=docSaldo(d);
     pedMap[d.cliId].count++;
   });
-  const listShown=list.slice(0,150);
+  const PAGE_CLI=100;
+  const pageAtual=window._cliPage||0;
+  const inicio=pageAtual*PAGE_CLI;
+  const listShown=list.slice(0,inicio+PAGE_CLI);
+  const temMais=list.length>listShown.length;
   const cliCnt=document.getElementById('cli-cnt');
-  if(cliCnt) cliCnt.textContent=list.length>150?'Mostrando 150 de '+list.length+' — use a busca':list.length+' cliente(s)';
+  if(cliCnt) cliCnt.textContent=list.length+' cliente(s)'+(temMais?' — mostrando '+listShown.length:'');
   document.getElementById('cli-tbody').innerHTML=listShown.length?listShown.map(c=>{
     const stats=pedMap[c.id]||{total:0,aRec:0,count:0};
     const peds={length:stats.count};
@@ -3187,6 +3192,16 @@ function renderClientes(){
       </div></td>
     </tr>`;
   }).join(''):`<tr><td colspan="7" class="es">Nenhum cliente</td></tr>`;
+  // Botão "Ver mais" se houver mais clientes além dos exibidos
+  if(temMais){
+    document.getElementById('cli-tbody').innerHTML+=
+      `<tr><td colspan="7" style="text-align:center;padding:12px">
+        <button class="btn bp bsm" onclick="window._cliPage=(window._cliPage||0)+1;renderClientes()">
+          ▼ Ver mais ${Math.min(PAGE_CLI, list.length-listShown.length)} clientes
+          (${list.length-listShown.length} restantes)
+        </button>
+      </td></tr>`;
+  }
 }
 
 function abrirCliente(id){
