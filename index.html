@@ -12037,11 +12037,14 @@ window.auth.onAuthStateChanged(function(user){
       col.doc('pedidos2').get(),  // legado - migração automática
     ]).then(function(docs){
       const metaDoc=docs[0],prodDoc=docs[1],ped1Doc=docs[2],ped2Doc=docs[3];
-      if(metaDoc.exists){
-        // SEMPRE usa a nuvem quando ela tem dados
+      const tsFirebase=metaDoc.exists?(metaDoc.data().ts||0):0;
+      const tsLocal=parseInt(localStorage.getItem(KEY+'_ts')||'0');
+      const localRaw=localStorage.getItem(KEY);
+      const localDB=localRaw?(function(){try{return JSON.parse(localRaw);}catch(e){return null;}})():null;
+      if(metaDoc.exists&&tsFirebase>=tsLocal){
+        // Firebase é mais recente — carrega da nuvem
         try{
           const m=metaDoc.data();
-          // Carrega meta base (config, seq, categorias)
           DB={
             config:      JSON.parse(m.config||'{}'),
             seq:         JSON.parse(m.seq||'{}'),
@@ -12072,6 +12075,11 @@ window.auth.onAuthStateChanged(function(user){
           const local=localStorage.getItem(KEY);
           if(local)try{DB=JSON.parse(local);}catch(ex){}
         }
+      } else if(localDB&&tsLocal>tsFirebase){
+        // localStorage mais recente (ex: após restaurar backup) — usa local e sobe para nuvem
+        DB=localDB;
+        cmxLog('SYNC','Local mais recente que Firebase — fazendo upload','tsLocal='+tsLocal+' tsFirebase='+tsFirebase);
+        salvarNaNuvem(tsLocal);
       } else {
         // Nuvem vazia — sobe o local para a nuvem
         const local=localStorage.getItem(KEY);
