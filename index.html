@@ -2322,23 +2322,36 @@ function markDirty(colecao){
 }
 
 function saveDB(){
-  const dados = JSON.stringify(DB);
   const ts = Date.now();
+  // Limpa backups antigos do localStorage
+  ['cmx4_auto_bk_0','cmx4_auto_bk_1','cmx4_auto_bk_2',
+   'cmx4_auto_bk_exit','cmx4_auto_bk_0_dt','cmx4_auto_bk_1_dt',
+   'cmx4_auto_bk_2_dt','cmx4_auto_bk_exit_dt'].forEach(function(k){
+    try{localStorage.removeItem(k);}catch(ex){}
+  });
   try{
-    ['cmx4_auto_bk_0','cmx4_auto_bk_1','cmx4_auto_bk_2',
-     'cmx4_auto_bk_exit','cmx4_auto_bk_0_dt','cmx4_auto_bk_1_dt',
-     'cmx4_auto_bk_2_dt','cmx4_auto_bk_exit_dt'].forEach(function(k){
-      try{localStorage.removeItem(k);}catch(ex){}
-    });
-    localStorage.setItem(KEY, dados);
+    localStorage.setItem(KEY, JSON.stringify(DB));
     localStorage.setItem(KEY+'_ts', String(ts));
   }catch(e){
-    console.warn('[saveDB] localStorage cheio, limpando...',e.name);
+    // localStorage cheio — salva versão reduzida (só pedidos dos últimos 120 dias + em aberto)
+    // Os dados COMPLETOS continuam na memória (DB) e no Firebase
+    cmxLog('WARN','localStorage cheio — salvando versão reduzida local',e.name);
     try{
-      localStorage.removeItem(KEY+'_ts');
-      localStorage.setItem(KEY, dados);
+      const corte=new Date();corte.setDate(corte.getDate()-120);
+      const corteISO=corte.toISOString().slice(0,10);
+      const dbReduzido=Object.assign({},DB,{
+        pedidos:(DB.pedidos||[]).filter(function(p){
+          const dt=String(p.dtISO||p.dt||'').slice(0,10);
+          const emAberto=!['pago','cancelado','mesclado-pago','convertido'].includes(p.st);
+          return emAberto||dt>=corteISO;
+        })
+      });
+      localStorage.setItem(KEY, JSON.stringify(dbReduzido));
       localStorage.setItem(KEY+'_ts', String(ts));
-    }catch(e2){console.error('[saveDB] Erro localStorage:',e2.name);}
+      cmxLog('INFO','Versão reduzida salva no local','pedidos local: '+dbReduzido.pedidos.length+' de '+DB.pedidos.length);
+    }catch(e2){
+      cmxLog('ERROR','Falha ao salvar local mesmo reduzido','Firebase é o backup principal');
+    }
   }
   _firebaseSavePending=true;
   showSI('pending');
@@ -11721,44 +11734,61 @@ function populateParceiroSelect(selectId, valorAtual){
 }
 
 function sincronizarNuvem(){
-  // Força recarga da nuvem sem perder nada
+  // Força recarga COMPLETA da nuvem (todos os docs mensais + meta divididos)
   if(!window.db||!window.currentUser){toast('⚠ Sem conexão com a nuvem','#f59e0b');return;}
+  // Proteção: não sincroniza se há save local pendente (evita perder dados não salvos)
+  if(_firebaseSavePending||_nuvemSaving||_nuvemTimer){
+    toast('⚠ Aguarde — salvando dados locais primeiro','#f59e0b');
+    return;
+  }
+  if(!confirm('Isso vai recarregar todos os dados da nuvem. Dados locais não salvos serão perdidos. Continuar?'))return;
   toast('🔄 Sincronizando...','#3b82f6');
   const uid=window.currentUser.uid;
   const col=window.db.collection('lojas').doc(uid).collection('d');
-  Promise.all([
-    col.doc('meta').get(),
-    col.doc('produtos').get(),
-    col.doc('pedidos1').get(),
-    col.doc('pedidos2').get(),
-  ]).then(function(docs){
-    const metaDoc=docs[0],prodDoc=docs[1],ped1Doc=docs[2],ped2Doc=docs[3];
-    if(!metaDoc.exists){toast('⚠ Nenhum dado na nuvem','#f59e0b');return;}
+  col.get().then(function(snapshot){
+    var docs={};
+    var monthlyPeds=[], legacyPeds=[];
+    snapshot.forEach(function(d){
+      docs[d.id]=d;
+      if(/^pedidos_\d{4}_\d{2}$/.test(d.id)){
+        try{monthlyPeds=monthlyPeds.concat(JSON.parse(d.data().pedidos||'[]'));}catch(e){}
+      } else if(d.id==='pedidos1'||d.id==='pedidos2'){
+        try{legacyPeds=legacyPeds.concat(JSON.parse(d.data().pedidos||'[]'));}catch(e){}
+      }
+    });
+    const metaDoc=docs['meta'];
+    if(!metaDoc||!metaDoc.exists){toast('⚠ Nenhum dado na nuvem','#f59e0b');return;}
     try{
       const m=metaDoc.data();
+      // Usa docs mensais se existirem, senão legado
+      var allPeds=monthlyPeds.length?monthlyPeds:legacyPeds;
+      // Dedup por ID
+      var seen={};
+      allPeds=allPeds.filter(function(p){if(!p.id||seen[p.id])return false;seen[p.id]=true;return true;});
+      // Meta dividido: pega de meta_clientes/fin/op se existirem, senão do meta legado
+      const mc=docs['meta_clientes'], mf=docs['meta_fin'], mo=docs['meta_op'];
       DB={
         config:      JSON.parse(m.config||'{}'),
         seq:         JSON.parse(m.seq||'{}'),
         categorias:  JSON.parse(m.categorias||'[]'),
         familias:    JSON.parse(m.familias||'[]'),
-        xmlMemoria:  JSON.parse(m.xmlMemoria||'{}'),
         campanhas:   JSON.parse(m.campanhas||'[]'),
-        parceiros:   JSON.parse(m.parceiros||'[]'),
-        boletos:     JSON.parse(m.boletos||'[]'),
-        despesas:    JSON.parse(m.despesas||'[]'),
-        fornecedores:JSON.parse(m.fornecedores||'[]'),
-        entradas:    JSON.parse(m.entradas||'[]'),
-        devolucoes:  JSON.parse(m.devolucoes||'[]'),
-        clientes:    JSON.parse(m.clientes||'[]'),
-        produtos:    prodDoc.exists?JSON.parse(prodDoc.data().produtos||'[]'):[],
-        pedidos:[
-          ...(ped1Doc.exists?JSON.parse(ped1Doc.data().pedidos||'[]'):[]),
-          ...(ped2Doc.exists?JSON.parse(ped2Doc.data().pedidos||'[]'):[]),
-        ],
+        clientes:    mc&&mc.exists?JSON.parse(mc.data().clientes||'[]'):JSON.parse(m.clientes||'[]'),
+        boletos:     mf&&mf.exists?JSON.parse(mf.data().boletos||'[]'):JSON.parse(m.boletos||'[]'),
+        despesas:    mf&&mf.exists?JSON.parse(mf.data().despesas||'[]'):JSON.parse(m.despesas||'[]'),
+        fornecedores:mo&&mo.exists?JSON.parse(mo.data().fornecedores||'[]'):JSON.parse(m.fornecedores||'[]'),
+        entradas:    mo&&mo.exists?JSON.parse(mo.data().entradas||'[]'):JSON.parse(m.entradas||'[]'),
+        devolucoes:  mo&&mo.exists?JSON.parse(mo.data().devolucoes||'[]'):JSON.parse(m.devolucoes||'[]'),
+        parceiros:   mo&&mo.exists?JSON.parse(mo.data().parceiros||'[]'):JSON.parse(m.parceiros||'[]'),
+        tarefas:     mo&&mo.exists?JSON.parse(mo.data().tarefas||'[]'):JSON.parse(m.tarefas||'[]'),
+        xmlMemoria:  mo&&mo.exists?JSON.parse(mo.data().xmlMemoria||'{}'):JSON.parse(m.xmlMemoria||'{}'),
+        produtos:    docs['produtos']&&docs['produtos'].exists?JSON.parse(docs['produtos'].data().produtos||'[]'):[],
+        pedidos:     allPeds,
       };
       localStorage.setItem(KEY,JSON.stringify(DB));
       localStorage.setItem(KEY+'_ts',String(m.ts||Date.now()));
       go(curPg||'dashboard');
+      cmxLog('SYNC','Sincronização manual concluída',''+allPeds.length+' pedidos');
       toast('✓ Dados sincronizados da nuvem!','#10b981');
     }catch(e){toast('⚠ Erro ao sincronizar: '+e.message,'#ef4444');}
   }).catch(function(e){toast('⚠ Erro de conexão: '+e.message,'#ef4444');});
@@ -12076,10 +12106,22 @@ window.auth.onAuthStateChanged(function(user){
           if(local)try{DB=JSON.parse(local);}catch(ex){}
         }
       } else if(localDB&&tsLocal>tsFirebase){
-        // localStorage mais recente (ex: após restaurar backup) — usa local e sobe para nuvem
+        // localStorage mais recente (ex: após restaurar backup) — usa local
         DB=localDB;
-        cmxLog('SYNC','Local mais recente que Firebase — fazendo upload','tsLocal='+tsLocal+' tsFirebase='+tsFirebase);
-        salvarNaNuvem(tsLocal);
+        // Recupera pedidos do Firebase que possam não estar no local (localStorage reduzido)
+        // antes de subir, para nunca perder pedidos antigos
+        const fbPedsLegado=[
+          ...(ped1Doc&&ped1Doc.exists?JSON.parse(ped1Doc.data().pedidos||'[]'):[]),
+          ...(ped2Doc&&ped2Doc.exists?JSON.parse(ped2Doc.data().pedidos||'[]'):[]),
+        ];
+        // Mescla: pedidos locais + pedidos do Firebase que não estão no local
+        const idsLocais={};
+        (DB.pedidos||[]).forEach(function(p){if(p.id)idsLocais[p.id]=true;});
+        fbPedsLegado.forEach(function(p){if(p.id&&!idsLocais[p.id]){DB.pedidos.push(p);idsLocais[p.id]=true;}});
+        cmxLog('SYNC','Local mais recente — mesclado com Firebase antes de upload','local+fb='+DB.pedidos.length);
+        // migrarPedidosTrimestrais (após initApp) vai recuperar os docs mensais também
+        // Aguarda 2s para a migração rodar antes de subir tudo
+        setTimeout(function(){salvarNaNuvem(Date.now());},2500);
       } else {
         // Nuvem vazia — sobe o local para a nuvem
         const local=localStorage.getItem(KEY);
