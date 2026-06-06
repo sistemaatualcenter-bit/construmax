@@ -12060,19 +12060,31 @@ window.auth.onAuthStateChanged(function(user){
     const uid = user.uid;
     const col = window.db.collection('lojas').doc(uid).collection('d');
     // Carrega 4 documentos da nuvem
-    Promise.all([
-      col.doc('meta').get(),
-      col.doc('produtos').get(),
-      col.doc('pedidos1').get(),  // legado - migração automática
-      col.doc('pedidos2').get(),  // legado - migração automática
-    ]).then(function(docs){
-      const metaDoc=docs[0],prodDoc=docs[1],ped1Doc=docs[2],ped2Doc=docs[3];
+    col.get().then(function(snapshot){
+      // Carrega TODOS os docs: meta dividido + produtos + pedidos mensais + legado
+      var D={};
+      var monthlyPeds=[], legacyPeds=[];
+      snapshot.forEach(function(doc){
+        D[doc.id]=doc;
+        if(/^pedidos_\d{4}_\d{2}$/.test(doc.id)){
+          try{monthlyPeds=monthlyPeds.concat(JSON.parse(doc.data().pedidos||'[]'));}catch(e){}
+        } else if(doc.id==='pedidos1'||doc.id==='pedidos2'){
+          try{legacyPeds=legacyPeds.concat(JSON.parse(doc.data().pedidos||'[]'));}catch(e){}
+        }
+      });
+      const metaDoc=D['meta']||{exists:false};
+      const prodDoc=D['produtos']||{exists:false};
+      const metaCli=D['meta_clientes'], metaFin=D['meta_fin'], metaOp=D['meta_op'];
+      // Pedidos: usa mensais se existirem, senão legado. Dedup por ID.
+      var fbPeds=monthlyPeds.length?monthlyPeds:legacyPeds;
+      var _seen={};
+      fbPeds=fbPeds.filter(function(p){if(!p.id||_seen[p.id])return false;_seen[p.id]=true;return true;});
       const tsFirebase=metaDoc.exists?(metaDoc.data().ts||0):0;
       const tsLocal=parseInt(localStorage.getItem(KEY+'_ts')||'0');
       const localRaw=localStorage.getItem(KEY);
       const localDB=localRaw?(function(){try{return JSON.parse(localRaw);}catch(e){return null;}})():null;
       if(metaDoc.exists&&tsFirebase>=tsLocal){
-        // Firebase é mais recente — carrega da nuvem
+        // Firebase é mais recente — carrega da nuvem (meta dividido com fallback p/ legado)
         try{
           const m=metaDoc.data();
           DB={
@@ -12081,25 +12093,21 @@ window.auth.onAuthStateChanged(function(user){
             categorias:  JSON.parse(m.categorias||'[]'),
             familias:    JSON.parse(m.familias||'[]'),
             campanhas:   JSON.parse(m.campanhas||'[]'),
-            // Campos do meta legado (fallback se novos docs não existirem)
-            xmlMemoria:  JSON.parse(m.xmlMemoria||'{}'),
-            parceiros:   JSON.parse(m.parceiros||'[]'),
-            boletos:     JSON.parse(m.boletos||'[]'),
-            despesas:    JSON.parse(m.despesas||'[]'),
-            tarefas:     JSON.parse(m.tarefas||'[]'),
-            fornecedores:JSON.parse(m.fornecedores||'[]'),
-            entradas:    JSON.parse(m.entradas||'[]'),
-            devolucoes:  JSON.parse(m.devolucoes||'[]'),
-            clientes:    JSON.parse(m.clientes||'[]'),
+            xmlMemoria:  metaOp&&metaOp.exists?JSON.parse(metaOp.data().xmlMemoria||'{}'):JSON.parse(m.xmlMemoria||'{}'),
+            parceiros:   metaOp&&metaOp.exists?JSON.parse(metaOp.data().parceiros||'[]'):JSON.parse(m.parceiros||'[]'),
+            tarefas:     metaOp&&metaOp.exists?JSON.parse(metaOp.data().tarefas||'[]'):JSON.parse(m.tarefas||'[]'),
+            fornecedores:metaOp&&metaOp.exists?JSON.parse(metaOp.data().fornecedores||'[]'):JSON.parse(m.fornecedores||'[]'),
+            entradas:    metaOp&&metaOp.exists?JSON.parse(metaOp.data().entradas||'[]'):JSON.parse(m.entradas||'[]'),
+            devolucoes:  metaOp&&metaOp.exists?JSON.parse(metaOp.data().devolucoes||'[]'):JSON.parse(m.devolucoes||'[]'),
+            boletos:     metaFin&&metaFin.exists?JSON.parse(metaFin.data().boletos||'[]'):JSON.parse(m.boletos||'[]'),
+            despesas:    metaFin&&metaFin.exists?JSON.parse(metaFin.data().despesas||'[]'):JSON.parse(m.despesas||'[]'),
+            clientes:    metaCli&&metaCli.exists?JSON.parse(metaCli.data().clientes||'[]'):JSON.parse(m.clientes||'[]'),
             produtos:    prodDoc.exists?JSON.parse(prodDoc.data().produtos||'[]'):[],
-            pedidos:(function(){
-              const p1=ped1Doc.exists?JSON.parse(ped1Doc.data().pedidos||'[]'):[];
-              const p2=ped2Doc.exists?JSON.parse(ped2Doc.data().pedidos||'[]'):[];
-              return [...p1,...p2];
-            })(),
+            pedidos:     fbPeds,
           };
           localStorage.setItem(KEY,JSON.stringify(DB));
           localStorage.setItem(KEY+'_ts',String(metaDoc.data().ts||Date.now()));
+          cmxLog('SYNC','Login: dados da nuvem',''+fbPeds.length+' pedidos ('+(monthlyPeds.length?'mensais':'legado')+')');
         }catch(e){
           console.warn('Erro ao montar DB da nuvem:',e);
           const local=localStorage.getItem(KEY);
@@ -12108,16 +12116,10 @@ window.auth.onAuthStateChanged(function(user){
       } else if(localDB&&tsLocal>tsFirebase){
         // localStorage mais recente (ex: após restaurar backup) — usa local
         DB=localDB;
-        // Recupera pedidos do Firebase que possam não estar no local (localStorage reduzido)
-        // antes de subir, para nunca perder pedidos antigos
-        const fbPedsLegado=[
-          ...(ped1Doc&&ped1Doc.exists?JSON.parse(ped1Doc.data().pedidos||'[]'):[]),
-          ...(ped2Doc&&ped2Doc.exists?JSON.parse(ped2Doc.data().pedidos||'[]'):[]),
-        ];
-        // Mescla: pedidos locais + pedidos do Firebase que não estão no local
+        // Mescla: pedidos locais + pedidos do Firebase (mensais) que não estão no local
         const idsLocais={};
         (DB.pedidos||[]).forEach(function(p){if(p.id)idsLocais[p.id]=true;});
-        fbPedsLegado.forEach(function(p){if(p.id&&!idsLocais[p.id]){DB.pedidos.push(p);idsLocais[p.id]=true;}});
+        fbPeds.forEach(function(p){if(p.id&&!idsLocais[p.id]){DB.pedidos.push(p);idsLocais[p.id]=true;}});
         cmxLog('SYNC','Local mais recente — mesclado com Firebase antes de upload','local+fb='+DB.pedidos.length);
         // migrarPedidosTrimestrais (após initApp) vai recuperar os docs mensais também
         // Aguarda 2s para a migração rodar antes de subir tudo
