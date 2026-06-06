@@ -2322,23 +2322,36 @@ function markDirty(colecao){
 }
 
 function saveDB(){
-  const dados = JSON.stringify(DB);
   const ts = Date.now();
+  // Limpa backups antigos do localStorage
+  ['cmx4_auto_bk_0','cmx4_auto_bk_1','cmx4_auto_bk_2',
+   'cmx4_auto_bk_exit','cmx4_auto_bk_0_dt','cmx4_auto_bk_1_dt',
+   'cmx4_auto_bk_2_dt','cmx4_auto_bk_exit_dt'].forEach(function(k){
+    try{localStorage.removeItem(k);}catch(ex){}
+  });
   try{
-    ['cmx4_auto_bk_0','cmx4_auto_bk_1','cmx4_auto_bk_2',
-     'cmx4_auto_bk_exit','cmx4_auto_bk_0_dt','cmx4_auto_bk_1_dt',
-     'cmx4_auto_bk_2_dt','cmx4_auto_bk_exit_dt'].forEach(function(k){
-      try{localStorage.removeItem(k);}catch(ex){}
-    });
-    localStorage.setItem(KEY, dados);
+    localStorage.setItem(KEY, JSON.stringify(DB));
     localStorage.setItem(KEY+'_ts', String(ts));
   }catch(e){
-    console.warn('[saveDB] localStorage cheio, limpando...',e.name);
+    // localStorage cheio — salva versão reduzida (só pedidos dos últimos 120 dias + em aberto)
+    // Os dados COMPLETOS continuam na memória (DB) e no Firebase
+    cmxLog('WARN','localStorage cheio — salvando versão reduzida local',e.name);
     try{
-      localStorage.removeItem(KEY+'_ts');
-      localStorage.setItem(KEY, dados);
+      const corte=new Date();corte.setDate(corte.getDate()-120);
+      const corteISO=corte.toISOString().slice(0,10);
+      const dbReduzido=Object.assign({},DB,{
+        pedidos:(DB.pedidos||[]).filter(function(p){
+          const dt=String(p.dtISO||p.dt||'').slice(0,10);
+          const emAberto=!['pago','cancelado','mesclado-pago','convertido'].includes(p.st);
+          return emAberto||dt>=corteISO;
+        })
+      });
+      localStorage.setItem(KEY, JSON.stringify(dbReduzido));
       localStorage.setItem(KEY+'_ts', String(ts));
-    }catch(e2){console.error('[saveDB] Erro localStorage:',e2.name);}
+      cmxLog('INFO','Versão reduzida salva no local','pedidos local: '+dbReduzido.pedidos.length+' de '+DB.pedidos.length);
+    }catch(e2){
+      cmxLog('ERROR','Falha ao salvar local mesmo reduzido','Firebase é o backup principal');
+    }
   }
   _firebaseSavePending=true;
   showSI('pending');
@@ -2440,8 +2453,10 @@ function salvarNaNuvem(ts){
   const dirty=window._cmxDirty||{all:true};
 
   // Monta lista de writes necessários
-  // meta SEMPRE escrito (contém ts crítico para sincronização)
-  var writes=[function(){return col.doc('meta').set(meta);}];
+  // meta escrito POR ÚLTIMO (contém ts — se escrever primeiro e outros falharem,
+  // próximo load pensa que Firebase está completo mas está faltando dados)
+  var writes=[];
+  var metaWrite=function(){return col.doc('meta').set(meta);};
 
   // Outros docs: só escreve se o conteúdo mudou (hash diferente do último save)
   var hCli=quickHash(metaClientes.clientes||'');
@@ -2469,6 +2484,8 @@ function salvarNaNuvem(ts){
         return function(){return col.doc(key).set({ts:timestamp,pedidos:JSON.stringify(pedsByQ[key])});};
       })(k));
   });
+  // meta POR ÚLTIMO — garante que ts só atualiza se todos os outros docs salvaram
+  writes.push(metaWrite);
 
   // Executa writes em sequência
   var chain=Promise.resolve();
@@ -11124,15 +11141,13 @@ function delTarefa(id){
 // SYNC AUTOMÁTICO — sincroniza silenciosamente antes de editar
 // ═══════════════════════════════════════════════════════
 function syncAntesDe(colecoes, callback){
-  // Se não tem Firebase, executa direto
   if(!window.db||!window.currentUser){callback();return;}
-  // Se há save pendente no debounce, NÃO sincroniza da nuvem
-  // (Firebase ainda tem dados antigos — local é mais recente)
+  // Se há save pendente, dados locais são mais recentes — não busca Firebase
   if(_firebaseSavePending||_nuvemSaving||_nuvemTimer){
-    console.log('[SYNC] Save pendente — usando dados locais');
-    callback();
-    return;
+    cmxLog('INFO','syncAntesDe ignorado — save pendente','');
+    callback();return;
   }
+  const tsLocal=parseInt(localStorage.getItem(KEY+'_ts')||'0');
   const uid=window.currentUser.uid;
   const col=window.db.collection('lojas').doc(uid).collection('d');
   const docs=['meta'];
@@ -11141,45 +11156,39 @@ function syncAntesDe(colecoes, callback){
   Promise.all(docs.map(function(d){return col.doc(d).get();}))
     .then(function(results){
       const metaDoc=results[0];
-      // Só usa Firebase se for mais recente que o local
       const tsFirebase=metaDoc&&metaDoc.exists?(metaDoc.data().ts||0):0;
-      const tsLocal=parseInt(localStorage.getItem(KEY+'_ts')||'0');
+      // Só usa Firebase se for mais recente que local
       if(tsFirebase<tsLocal){
-        console.log('[SYNC] Local mais recente — ignorando Firebase');
-        callback();
-        return;
+        cmxLog('INFO','syncAntesDe: local mais recente — ignorando','tsF='+tsFirebase+' tsL='+tsLocal);
+        callback();return;
       }
       if(metaDoc&&metaDoc.exists){
         try{
           const m=metaDoc.data();
-          if(m.clientes)DB.clientes=JSON.parse(m.clientes);
-          if(m.seq)DB.seq=JSON.parse(m.seq);
-          if(m.parceiros)DB.parceiros=JSON.parse(m.parceiros);
-          if(m.fornecedores)DB.fornecedores=JSON.parse(m.fornecedores);
-          if(m.despesas)DB.despesas=JSON.parse(m.despesas);
-          if(m.boletos)DB.boletos=JSON.parse(m.boletos);
-          if(m.config)DB.config=JSON.parse(m.config);
-        }catch(e){console.warn('syncAntesDe meta erro:',e);}
+          // Proteção por contagem em todas as coleções
+          if(m.clientes){const v=JSON.parse(m.clientes||'[]');if(v.length>=DB.clientes.length)DB.clientes=v;}
+          if(m.seq)DB.seq=JSON.parse(m.seq||'{}');
+          if(m.parceiros){const v=JSON.parse(m.parceiros||'[]');if(v.length>=DB.parceiros.length)DB.parceiros=v;}
+          if(m.fornecedores){const v=JSON.parse(m.fornecedores||'[]');if(v.length>=DB.fornecedores.length)DB.fornecedores=v;}
+          if(m.despesas){const v=JSON.parse(m.despesas||'[]');if(v.length>=DB.despesas.length)DB.despesas=v;}
+          if(m.boletos){const v=JSON.parse(m.boletos||'[]');if(v.length>=DB.boletos.length)DB.boletos=v;}
+          if(m.config)DB.config=JSON.parse(m.config||'{}');
+        }catch(e){cmxLog('WARN','syncAntesDe meta erro',e.message);}
       }
       if(colecoes.includes('produtos')&&results[1]&&results[1].exists){
         try{
           const fbPrds=JSON.parse(results[1].data().produtos||'[]');
-          // Só substitui se Firebase tem mais ou igual produtos que local
-          if(fbPrds.length>=DB.produtos.length){
-            DB.produtos=fbPrds;
-          }
+          if(fbPrds.length>=DB.produtos.length)DB.produtos=fbPrds;
         }catch(e){}
       }
       if(colecoes.includes('pedidos')){
-        const p1=docs.includes('pedidos1')?results[docs.indexOf('pedidos1')]:null;
-        const p2=docs.includes('pedidos2')?results[docs.indexOf('pedidos2')]:null;
         try{
+          const p1=results[docs.indexOf('pedidos1')];
+          const p2=results[docs.indexOf('pedidos2')];
           const arr1=p1&&p1.exists?JSON.parse(p1.data().pedidos||'[]'):[];
           const arr2=p2&&p2.exists?JSON.parse(p2.data().pedidos||'[]'):[];
           const fbPeds=[...arr1,...arr2];
-          if(fbPeds.length>=DB.pedidos.length){
-            DB.pedidos=fbPeds;
-          }
+          if(fbPeds.length>=DB.pedidos.length)DB.pedidos=fbPeds;
         }catch(e){}
       }
       localStorage.setItem(KEY,JSON.stringify(DB));
@@ -11187,10 +11196,6 @@ function syncAntesDe(colecoes, callback){
     .catch(function(e){cmxLog('WARN','syncAntesDe falhou',(e&&e.message)||String(e));})
     .finally(function(){callback();});
 }
-
-// ═══════════════════════════════════════════════════════
-// CONTADOR ATÔMICO DE PEDIDOS — evita duplicidade multi-dispositivo
-// ═══════════════════════════════════════════════════════
 function getProximoNumPed(tipo,callback){
   // Usa apenas contador local — sem Firebase transaction
   // Evita writes extras fora do debounce que causavam resource-exhausted
@@ -11733,44 +11738,61 @@ function populateParceiroSelect(selectId, valorAtual){
 }
 
 function sincronizarNuvem(){
-  // Força recarga da nuvem sem perder nada
+  // Força recarga COMPLETA da nuvem (todos os docs mensais + meta divididos)
   if(!window.db||!window.currentUser){toast('⚠ Sem conexão com a nuvem','#f59e0b');return;}
+  // Proteção: não sincroniza se há save local pendente (evita perder dados não salvos)
+  if(_firebaseSavePending||_nuvemSaving||_nuvemTimer){
+    toast('⚠ Aguarde — salvando dados locais primeiro','#f59e0b');
+    return;
+  }
+  if(!confirm('Isso vai recarregar todos os dados da nuvem. Dados locais não salvos serão perdidos. Continuar?'))return;
   toast('🔄 Sincronizando...','#3b82f6');
   const uid=window.currentUser.uid;
   const col=window.db.collection('lojas').doc(uid).collection('d');
-  Promise.all([
-    col.doc('meta').get(),
-    col.doc('produtos').get(),
-    col.doc('pedidos1').get(),
-    col.doc('pedidos2').get(),
-  ]).then(function(docs){
-    const metaDoc=docs[0],prodDoc=docs[1],ped1Doc=docs[2],ped2Doc=docs[3];
-    if(!metaDoc.exists){toast('⚠ Nenhum dado na nuvem','#f59e0b');return;}
+  col.get().then(function(snapshot){
+    var docs={};
+    var monthlyPeds=[], legacyPeds=[];
+    snapshot.forEach(function(d){
+      docs[d.id]=d;
+      if(/^pedidos_\d{4}_\d{2}$/.test(d.id)){
+        try{monthlyPeds=monthlyPeds.concat(JSON.parse(d.data().pedidos||'[]'));}catch(e){}
+      } else if(d.id==='pedidos1'||d.id==='pedidos2'){
+        try{legacyPeds=legacyPeds.concat(JSON.parse(d.data().pedidos||'[]'));}catch(e){}
+      }
+    });
+    const metaDoc=docs['meta'];
+    if(!metaDoc||!metaDoc.exists){toast('⚠ Nenhum dado na nuvem','#f59e0b');return;}
     try{
       const m=metaDoc.data();
+      // Usa docs mensais se existirem, senão legado
+      var allPeds=monthlyPeds.length?monthlyPeds:legacyPeds;
+      // Dedup por ID
+      var seen={};
+      allPeds=allPeds.filter(function(p){if(!p.id||seen[p.id])return false;seen[p.id]=true;return true;});
+      // Meta dividido: pega de meta_clientes/fin/op se existirem, senão do meta legado
+      const mc=docs['meta_clientes'], mf=docs['meta_fin'], mo=docs['meta_op'];
       DB={
         config:      JSON.parse(m.config||'{}'),
         seq:         JSON.parse(m.seq||'{}'),
         categorias:  JSON.parse(m.categorias||'[]'),
         familias:    JSON.parse(m.familias||'[]'),
-        xmlMemoria:  JSON.parse(m.xmlMemoria||'{}'),
         campanhas:   JSON.parse(m.campanhas||'[]'),
-        parceiros:   JSON.parse(m.parceiros||'[]'),
-        boletos:     JSON.parse(m.boletos||'[]'),
-        despesas:    JSON.parse(m.despesas||'[]'),
-        fornecedores:JSON.parse(m.fornecedores||'[]'),
-        entradas:    JSON.parse(m.entradas||'[]'),
-        devolucoes:  JSON.parse(m.devolucoes||'[]'),
-        clientes:    JSON.parse(m.clientes||'[]'),
-        produtos:    prodDoc.exists?JSON.parse(prodDoc.data().produtos||'[]'):[],
-        pedidos:[
-          ...(ped1Doc.exists?JSON.parse(ped1Doc.data().pedidos||'[]'):[]),
-          ...(ped2Doc.exists?JSON.parse(ped2Doc.data().pedidos||'[]'):[]),
-        ],
+        clientes:    mc&&mc.exists?JSON.parse(mc.data().clientes||'[]'):JSON.parse(m.clientes||'[]'),
+        boletos:     mf&&mf.exists?JSON.parse(mf.data().boletos||'[]'):JSON.parse(m.boletos||'[]'),
+        despesas:    mf&&mf.exists?JSON.parse(mf.data().despesas||'[]'):JSON.parse(m.despesas||'[]'),
+        fornecedores:mo&&mo.exists?JSON.parse(mo.data().fornecedores||'[]'):JSON.parse(m.fornecedores||'[]'),
+        entradas:    mo&&mo.exists?JSON.parse(mo.data().entradas||'[]'):JSON.parse(m.entradas||'[]'),
+        devolucoes:  mo&&mo.exists?JSON.parse(mo.data().devolucoes||'[]'):JSON.parse(m.devolucoes||'[]'),
+        parceiros:   mo&&mo.exists?JSON.parse(mo.data().parceiros||'[]'):JSON.parse(m.parceiros||'[]'),
+        tarefas:     mo&&mo.exists?JSON.parse(mo.data().tarefas||'[]'):JSON.parse(m.tarefas||'[]'),
+        xmlMemoria:  mo&&mo.exists?JSON.parse(mo.data().xmlMemoria||'{}'):JSON.parse(m.xmlMemoria||'{}'),
+        produtos:    docs['produtos']&&docs['produtos'].exists?JSON.parse(docs['produtos'].data().produtos||'[]'):[],
+        pedidos:     allPeds,
       };
       localStorage.setItem(KEY,JSON.stringify(DB));
       localStorage.setItem(KEY+'_ts',String(m.ts||Date.now()));
       go(curPg||'dashboard');
+      cmxLog('SYNC','Sincronização manual concluída',''+allPeds.length+' pedidos');
       toast('✓ Dados sincronizados da nuvem!','#10b981');
     }catch(e){toast('⚠ Erro ao sincronizar: '+e.message,'#ef4444');}
   }).catch(function(e){toast('⚠ Erro de conexão: '+e.message,'#ef4444');});
@@ -11821,134 +11843,69 @@ function iniciarListenerSync(){
 }
 
 
-function migrarPedidosTrimestrais(){ // detecta docs mensais E trimestrais
+function migrarPedidosTrimestrais(){
   if(!window.db||!window.currentUser)return;
+  // Não executa se há save pendente (dados locais podem ser mais recentes)
+  if(_firebaseSavePending||_nuvemSaving)return;
   const uid=window.currentUser.uid;
   const col=window.db.collection('lojas').doc(uid).collection('d');
+  const tsLocal=parseInt(localStorage.getItem(KEY+'_ts')||'0');
   col.get().then(function(snapshot){
     var monthlyDocs=[], quarterlyDocs=[], metaCli=null, metaFin=null, metaOp=null;
     snapshot.forEach(function(doc){
-      if(/^pedidos_\d{4}_\d{2}$/.test(doc.id)) monthlyDocs.push(doc);      // ex: pedidos_2026_05
-      else if(/^pedidos_\d{4}_Q\d$/.test(doc.id)) quarterlyDocs.push(doc); // ex: pedidos_2026_Q2 (legado)
+      if(/^pedidos_\d{4}_\d{2}$/.test(doc.id)) monthlyDocs.push(doc);
+      else if(/^pedidos_\d{4}_Q\d$/.test(doc.id)) quarterlyDocs.push(doc);
       if(doc.id==='meta_clientes') metaCli=doc;
       if(doc.id==='meta_fin')      metaFin=doc;
       if(doc.id==='meta_op')       metaOp=doc;
     });
-
     var mudou=false;
-
-    // PEDIDOS: usa mensais se existirem, senão usa trimestrais (nunca os dois juntos)
+    // ── PEDIDOS (mensais têm prioridade sobre trimestrais)
     var docsParaUsar=monthlyDocs.length?monthlyDocs:quarterlyDocs;
     if(docsParaUsar.length){
       var allPeds=[];
       docsParaUsar.forEach(function(doc){
         try{allPeds=allPeds.concat(JSON.parse(doc.data().pedidos||'[]'));}catch(e){}
       });
-      // Deduplica por ID (segurança extra)
       var seen={};
-      allPeds=allPeds.filter(function(p){
-        if(!p.id||seen[p.id])return false;
-        seen[p.id]=true;return true;
-      });
-      if(allPeds.length>=DB.pedidos.length){
-        DB.pedidos=allPeds; mudou=true;
-        cmxLog('SYNC','Pedidos carregados',''+allPeds.length+' pedidos de '+docsParaUsar.length+' doc(s) mensais');
+      allPeds=allPeds.filter(function(p){if(!p.id||seen[p.id])return false;seen[p.id]=true;return true;});
+      if(allPeds.length>=DB.pedidos.length){DB.pedidos=allPeds;mudou=true;
+        cmxLog('SYNC','Pedidos carregados',''+allPeds.length+' pedidos de '+docsParaUsar.length+' doc(s)');
       }
-      // Docs trimestrais antigos são ignorados (mensais têm prioridade)
-      // Não deletamos para evitar writes extras que causam resource-exhausted
     }
-
-    // META_CLIENTES — só carrega se Firebase for mais recente que local
-    var tsLocalCli=parseInt(localStorage.getItem(KEY+'_ts')||'0');
+    // Proteção: só carrega meta_X se Firebase for mais recente que local
+    // E nunca reduz quantidade de registros
+    function safeMerge(fbVal, dbVal){
+      if(!fbVal)return dbVal;
+      return fbVal.length>=dbVal.length?fbVal:dbVal;
+    }
+    // ── META_CLIENTES
     var tsFireCli=metaCli&&metaCli.exists?(metaCli.data().ts||0):0;
-    if(metaCli&&metaCli.exists&&tsFireCli>=tsLocalCli&&!_firebaseSavePending&&!_nuvemSaving){
+    if(metaCli&&metaCli.exists&&tsFireCli>=tsLocal&&!_firebaseSavePending&&!_nuvemSaving){
       try{
         var fbClis=JSON.parse(metaCli.data().clientes||'[]');
-        // Só substitui se Firebase tem >= clientes que local (proteção anti-perda)
-        if(fbClis.length>=DB.clientes.length){
-          DB.clientes=fbClis;mudou=true;
-        }
+        DB.clientes=safeMerge(fbClis,DB.clientes);mudou=true;
       }catch(e){}
     }
-    // META_FIN
-    if(metaFin&&metaFin.exists){
+    // ── META_FIN
+    var tsFireFin=metaFin&&metaFin.exists?(metaFin.data().ts||0):0;
+    if(metaFin&&metaFin.exists&&tsFireFin>=tsLocal&&!_firebaseSavePending&&!_nuvemSaving){
       try{
         const mf=metaFin.data();
-        if(mf.boletos)DB.boletos=JSON.parse(mf.boletos||'[]');
-        if(mf.despesas)DB.despesas=JSON.parse(mf.despesas||'[]');
+        if(mf.boletos){DB.boletos=safeMerge(JSON.parse(mf.boletos||'[]'),DB.boletos);}
+        if(mf.despesas){DB.despesas=safeMerge(JSON.parse(mf.despesas||'[]'),DB.despesas);}
         mudou=true;
       }catch(e){}
     }
-    // META_OP
-    if(metaOp&&metaOp.exists){
+    // ── META_OP
+    var tsFireOp=metaOp&&metaOp.exists?(metaOp.data().ts||0):0;
+    if(metaOp&&metaOp.exists&&tsFireOp>=tsLocal&&!_firebaseSavePending&&!_nuvemSaving){
       try{
         const mo=metaOp.data();
-        if(mo.fornecedores)DB.fornecedores=JSON.parse(mo.fornecedores||'[]');
-        if(mo.entradas)DB.entradas=JSON.parse(mo.entradas||'[]');
-        if(mo.devolucoes)DB.devolucoes=JSON.parse(mo.devolucoes||'[]');
-        if(mo.parceiros)DB.parceiros=JSON.parse(mo.parceiros||'[]');
-        if(mo.tarefas)DB.tarefas=JSON.parse(mo.tarefas||'[]');
-        if(mo.xmlMemoria)DB.xmlMemoria=JSON.parse(mo.xmlMemoria||'{}');
-        mudou=true;
-      }catch(e){}
-    }
-
-    if(mudou){
-      localStorage.setItem(KEY,JSON.stringify(DB));
-      if(typeof renderDash==='function'){
-        if(curPg==='dashboard')renderDash();
-        else if(curPg==='pedidos')renderPedidos();
-      }
-    }
-  }).catch(function(e){cmxLog('WARN','migrarPedidosTrimestrais falhou',(e&&e.message)||String(e));});
-}
-
-function migrarPedidosTrimestrais(){
-  if(!window.db||!window.currentUser)return;
-  const uid=window.currentUser.uid;
-  const col=window.db.collection('lojas').doc(uid).collection('d');
-  // Carrega todos os docs da subcoleção d/
-  col.get().then(function(snapshot){
-    var qDocs=[], metaCli=null, metaFin=null, metaOp=null;
-    snapshot.forEach(function(doc){
-      if(/^pedidos_\d{4}_(\d{2}|Q\d)$/.test(doc.id)) qDocs.push(doc);
-      if(doc.id==='meta_clientes') metaCli=doc;
-      if(doc.id==='meta_fin')      metaFin=doc;
-      if(doc.id==='meta_op')       metaOp=doc;
-    });
-    var mudou=false;
-    // Carrega pedidos trimestrais
-    if(qDocs.length){
-      var allPeds=[];
-      qDocs.forEach(function(doc){
-        try{allPeds=allPeds.concat(JSON.parse(doc.data().pedidos||'[]'));}catch(e){}
-      });
-      if(allPeds.length>=DB.pedidos.length){
-        DB.pedidos=allPeds; mudou=true;
-        cmxLog('SYNC','Migração trimestral carregada',''+allPeds.length+' pedidos de '+qDocs.length+' trimestre(s)');
-      }
-    }
-    // Carrega meta_clientes se existir
-    if(metaCli&&metaCli.exists){
-      try{DB.clientes=JSON.parse(metaCli.data().clientes||'[]');mudou=true;}catch(e){}
-    }
-    // Carrega meta_fin se existir
-    if(metaFin&&metaFin.exists){
-      try{
-        const mf=metaFin.data();
-        if(mf.boletos)DB.boletos=JSON.parse(mf.boletos||'[]');
-        if(mf.despesas)DB.despesas=JSON.parse(mf.despesas||'[]');
-        mudou=true;
-      }catch(e){}
-    }
-    // Carrega meta_op se existir
-    if(metaOp&&metaOp.exists){
-      try{
-        const mo=metaOp.data();
-        if(mo.fornecedores)DB.fornecedores=JSON.parse(mo.fornecedores||'[]');
-        if(mo.entradas)DB.entradas=JSON.parse(mo.entradas||'[]');
-        if(mo.devolucoes)DB.devolucoes=JSON.parse(mo.devolucoes||'[]');
-        if(mo.parceiros)DB.parceiros=JSON.parse(mo.parceiros||'[]');
+        if(mo.entradas){DB.entradas=safeMerge(JSON.parse(mo.entradas||'[]'),DB.entradas);}
+        if(mo.fornecedores){DB.fornecedores=safeMerge(JSON.parse(mo.fornecedores||'[]'),DB.fornecedores);}
+        if(mo.devolucoes){DB.devolucoes=safeMerge(JSON.parse(mo.devolucoes||'[]'),DB.devolucoes);}
+        if(mo.parceiros){DB.parceiros=safeMerge(JSON.parse(mo.parceiros||'[]'),DB.parceiros);}
         if(mo.tarefas)DB.tarefas=JSON.parse(mo.tarefas||'[]');
         if(mo.xmlMemoria)DB.xmlMemoria=JSON.parse(mo.xmlMemoria||'{}');
         mudou=true;
@@ -11960,17 +11917,6 @@ function migrarPedidosTrimestrais(){
         if(curPg==='dashboard')renderDash();
         else if(curPg==='pedidos')renderPedidos();
       }
-    }
-    // Limpa docs trimestrais antigos (Q1,Q2,Q3,Q4) se já existem docs mensais
-    var hasMonthly=qDocs.some(function(d){return /^pedidos_\d{4}_\d{2}$/.test(d.id);});
-    var hasQuarterly=qDocs.some(function(d){return /^pedidos_\d{4}_Q\d$/.test(d.id);});
-    if(hasMonthly&&hasQuarterly){
-      var toDelete=qDocs.filter(function(d){return /^pedidos_\d{4}_Q\d$/.test(d.id);});
-      toDelete.forEach(function(d){
-        col.doc(d.id).delete()
-          .then(function(){cmxLog('SYNC','Documento trimestral antigo removido',d.id);})
-          .catch(function(){});
-      });
     }
   }).catch(function(e){cmxLog('WARN','migrarPedidosTrimestrais falhou',(e&&e.message)||String(e));});
 }
@@ -12118,48 +12064,93 @@ window.auth.onAuthStateChanged(function(user){
     const uid = user.uid;
     const col = window.db.collection('lojas').doc(uid).collection('d');
     // Carrega 4 documentos da nuvem
-    Promise.all([
-      col.doc('meta').get(),
-      col.doc('produtos').get(),
-      col.doc('pedidos1').get(),  // legado - migração automática
-      col.doc('pedidos2').get(),  // legado - migração automática
-    ]).then(function(docs){
-      const metaDoc=docs[0],prodDoc=docs[1],ped1Doc=docs[2],ped2Doc=docs[3];
-      if(metaDoc.exists){
-        // SEMPRE usa a nuvem quando ela tem dados
+    col.get().then(function(snapshot){
+      // Carrega TODOS os docs: meta dividido + produtos + pedidos mensais + legado
+      var D={};
+      var monthlyPeds=[], legacyPeds=[];
+      snapshot.forEach(function(doc){
+        D[doc.id]=doc;
+        if(/^pedidos_\d{4}_\d{2}$/.test(doc.id)){
+          try{monthlyPeds=monthlyPeds.concat(JSON.parse(doc.data().pedidos||'[]'));}catch(e){}
+        } else if(doc.id==='pedidos1'||doc.id==='pedidos2'){
+          try{legacyPeds=legacyPeds.concat(JSON.parse(doc.data().pedidos||'[]'));}catch(e){}
+        }
+      });
+      const metaDoc=D['meta']||{exists:false};
+      const prodDoc=D['produtos']||{exists:false};
+      const metaCli=D['meta_clientes'], metaFin=D['meta_fin'], metaOp=D['meta_op'];
+      // Pedidos: usa mensais se existirem, senão legado. Dedup por ID.
+      var fbPeds=monthlyPeds.length?monthlyPeds:legacyPeds;
+      var _seen={};
+      fbPeds=fbPeds.filter(function(p){if(!p.id||_seen[p.id])return false;_seen[p.id]=true;return true;});
+      const tsFirebase=metaDoc.exists?(metaDoc.data().ts||0):0;
+      const tsLocal=parseInt(localStorage.getItem(KEY+'_ts')||'0');
+      const localRaw=localStorage.getItem(KEY);
+      const localDB=localRaw?(function(){try{return JSON.parse(localRaw);}catch(e){return null;}})():null;
+      if(metaDoc.exists&&tsFirebase>=tsLocal){
+        // Firebase é mais recente — carrega da nuvem (meta dividido com fallback p/ legado)
         try{
           const m=metaDoc.data();
-          // Carrega meta base (config, seq, categorias)
           DB={
             config:      JSON.parse(m.config||'{}'),
             seq:         JSON.parse(m.seq||'{}'),
             categorias:  JSON.parse(m.categorias||'[]'),
             familias:    JSON.parse(m.familias||'[]'),
             campanhas:   JSON.parse(m.campanhas||'[]'),
-            // Campos do meta legado (fallback se novos docs não existirem)
-            xmlMemoria:  JSON.parse(m.xmlMemoria||'{}'),
-            parceiros:   JSON.parse(m.parceiros||'[]'),
-            boletos:     JSON.parse(m.boletos||'[]'),
-            despesas:    JSON.parse(m.despesas||'[]'),
-            tarefas:     JSON.parse(m.tarefas||'[]'),
-            fornecedores:JSON.parse(m.fornecedores||'[]'),
-            entradas:    JSON.parse(m.entradas||'[]'),
-            devolucoes:  JSON.parse(m.devolucoes||'[]'),
-            clientes:    JSON.parse(m.clientes||'[]'),
+            xmlMemoria:  metaOp&&metaOp.exists?JSON.parse(metaOp.data().xmlMemoria||'{}'):JSON.parse(m.xmlMemoria||'{}'),
+            parceiros:   metaOp&&metaOp.exists?JSON.parse(metaOp.data().parceiros||'[]'):JSON.parse(m.parceiros||'[]'),
+            tarefas:     metaOp&&metaOp.exists?JSON.parse(metaOp.data().tarefas||'[]'):JSON.parse(m.tarefas||'[]'),
+            fornecedores:metaOp&&metaOp.exists?JSON.parse(metaOp.data().fornecedores||'[]'):JSON.parse(m.fornecedores||'[]'),
+            entradas:    metaOp&&metaOp.exists?JSON.parse(metaOp.data().entradas||'[]'):JSON.parse(m.entradas||'[]'),
+            devolucoes:  metaOp&&metaOp.exists?JSON.parse(metaOp.data().devolucoes||'[]'):JSON.parse(m.devolucoes||'[]'),
+            boletos:     metaFin&&metaFin.exists?JSON.parse(metaFin.data().boletos||'[]'):JSON.parse(m.boletos||'[]'),
+            despesas:    metaFin&&metaFin.exists?JSON.parse(metaFin.data().despesas||'[]'):JSON.parse(m.despesas||'[]'),
+            clientes:    metaCli&&metaCli.exists?JSON.parse(metaCli.data().clientes||'[]'):JSON.parse(m.clientes||'[]'),
             produtos:    prodDoc.exists?JSON.parse(prodDoc.data().produtos||'[]'):[],
-            pedidos:(function(){
-              const p1=ped1Doc.exists?JSON.parse(ped1Doc.data().pedidos||'[]'):[];
-              const p2=ped2Doc.exists?JSON.parse(ped2Doc.data().pedidos||'[]'):[];
-              return [...p1,...p2];
-            })(),
+            pedidos:     fbPeds,
           };
+          // Proteção: mescla com localStorage se local tiver MAIS registros em alguma coleção
+          // Isso protege contra uploads parciais (meta.ts atualizado mas meta_clientes falhou)
+          if(localDB){
+            ['clientes','produtos','fornecedores','entradas','boletos','despesas','devolucoes','parceiros'].forEach(function(k){
+              var fb=DB[k]||[];
+              var lc=localDB[k]||[];
+              if(lc.length>fb.length){
+                // Local tem mais — mescla (adiciona registros do local que não estão no Firebase)
+                var ids={};
+                fb.forEach(function(r){if(r.id)ids[r.id]=true;});
+                lc.forEach(function(r){if(r.id&&!ids[r.id]){DB[k].push(r);ids[r.id]=true;}});
+                cmxLog('SYNC','Merge local>firebase em '+k,'fb='+fb.length+' local='+lc.length+' final='+DB[k].length);
+              }
+            });
+            // Pedidos: mesma lógica
+            var lcPeds=localDB.pedidos||[];
+            if(lcPeds.length>DB.pedidos.length){
+              var pids={};
+              DB.pedidos.forEach(function(p){if(p.id)pids[p.id]=true;});
+              lcPeds.forEach(function(p){if(p.id&&!pids[p.id]){DB.pedidos.push(p);pids[p.id]=true;}});
+              cmxLog('SYNC','Merge pedidos local>firebase','fb='+fbPeds.length+' local='+lcPeds.length+' final='+DB.pedidos.length);
+            }
+          }
           localStorage.setItem(KEY,JSON.stringify(DB));
           localStorage.setItem(KEY+'_ts',String(metaDoc.data().ts||Date.now()));
+          cmxLog('SYNC','Login: dados carregados',''+DB.pedidos.length+' pedidos, '+DB.clientes.length+' clientes');
         }catch(e){
           console.warn('Erro ao montar DB da nuvem:',e);
           const local=localStorage.getItem(KEY);
           if(local)try{DB=JSON.parse(local);}catch(ex){}
         }
+      } else if(localDB&&tsLocal>tsFirebase){
+        // localStorage mais recente (ex: após restaurar backup) — usa local
+        DB=localDB;
+        // Mescla: pedidos locais + pedidos do Firebase (mensais) que não estão no local
+        const idsLocais={};
+        (DB.pedidos||[]).forEach(function(p){if(p.id)idsLocais[p.id]=true;});
+        fbPeds.forEach(function(p){if(p.id&&!idsLocais[p.id]){DB.pedidos.push(p);idsLocais[p.id]=true;}});
+        cmxLog('SYNC','Local mais recente — mesclado com Firebase antes de upload','local+fb='+DB.pedidos.length);
+        // migrarPedidosTrimestrais (após initApp) vai recuperar os docs mensais também
+        // Aguarda 2s para a migração rodar antes de subir tudo
+        setTimeout(function(){salvarNaNuvem(Date.now());},2500);
       } else {
         // Nuvem vazia — sobe o local para a nuvem
         const local=localStorage.getItem(KEY);
