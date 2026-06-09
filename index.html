@@ -2453,44 +2453,40 @@ function salvarNaNuvem(ts){
   const dirty=window._cmxDirty||{all:true};
 
   // Monta lista de writes necessários
-  // meta escrito POR ÚLTIMO (contém ts — se escrever primeiro e outros falharem,
-  // próximo load pensa que Firebase está completo mas está faltando dados)
-  var writes=[];
-  var metaWrite=function(){return col.doc('meta').set(meta);};
+  // Usa Firebase Batch Write — todos os docs salvam como UMA operação atômica
+  // Evita resource-exhausted (fila de writes) e garante consistência
+  var batch=window.db.batch();
+  var writeCount=0;
 
   // Outros docs: só escreve se o conteúdo mudou (hash diferente do último save)
   var hCli=quickHash(metaClientes.clientes||'');
   if((dirty.all||dirty.clientes)&&hCli!==window._lastHashes.clientes){
-    writes.push(function(){return col.doc('meta_clientes').set(metaClientes);});
+    batch.set(col.doc('meta_clientes'),metaClientes);writeCount++;
   }
   var hFin=quickHash((metaFin.boletos||'')+(metaFin.despesas||''));
   if((dirty.all||dirty.fin)&&hFin!==window._lastHashes.fin){
-    writes.push(function(){return col.doc('meta_fin').set(metaFin);});
+    batch.set(col.doc('meta_fin'),metaFin);writeCount++;
   }
   var hOp=quickHash((metaOp.fornecedores||'')+(metaOp.entradas||'').slice(0,200));
   if((dirty.all||dirty.op)&&hOp!==window._lastHashes.op){
-    writes.push(function(){return col.doc('meta_op').set(metaOp);});
+    batch.set(col.doc('meta_op'),metaOp);writeCount++;
   }
   var prodStr=JSON.stringify(DB.produtos||[]);
   var hPrd=quickHash(prodStr);
   if((dirty.all||dirty.produtos)&&hPrd!==window._lastHashes.produtos){
-    writes.push(function(){return col.doc('produtos').set({ts:timestamp,produtos:prodStr});});
+    batch.set(col.doc('produtos'),{ts:timestamp,produtos:prodStr});writeCount++;
   }
   // Pedidos: só escreve os meses que mudaram
   var dirtyMonths=dirty.all?qKeys:(dirty.pedidosMeses||qKeys);
   dirtyMonths.forEach(function(k){
     if(pedsByQ[k])
-      writes.push((function(key){  // IIFE captura 'key' por valor (evita bug de closure em loop)
-        return function(){return col.doc(key).set({ts:timestamp,pedidos:JSON.stringify(pedsByQ[key])});};
-      })(k));
+      batch.set(col.doc(k),{ts:timestamp,pedidos:JSON.stringify(pedsByQ[k])});writeCount++;
   });
-  // meta POR ÚLTIMO — garante que ts só atualiza se todos os outros docs salvaram
-  writes.push(metaWrite);
+  // meta POR ÚLTIMO — garante que ts só atualiza junto com os dados
+  batch.set(col.doc('meta'),meta);writeCount++;
 
-  // Executa writes em sequência
-  var chain=Promise.resolve();
-  writes.forEach(function(fn){chain=chain.then(fn);});
-  chain.then(function(){
+  // Executa batch — uma única operação de rede
+  batch.commit().then(function(){
     window._cmxDirty={};  // limpa flags após save bem-sucedido
     // Atualiza hashes para evitar reescritas desnecessárias
     window._lastHashes.clientes=quickHash(metaClientes.clientes||'');
@@ -2501,7 +2497,7 @@ function salvarNaNuvem(ts){
     _firebaseSavePending=false;
     _nuvemSaving=false;
     showSI('saved');
-    cmxLog('FIREBASE','Salvo',''+writes.length+' doc(s), '+peds.length+' pedidos');
+    cmxLog('FIREBASE','Salvo (batch)',''+writeCount+' doc(s), '+peds.length+' pedidos');
   }).catch(function(e){
     const code=e.code||'';
     const msg=(e.message||'').toLowerCase();
