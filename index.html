@@ -11713,18 +11713,7 @@ function finalizarComanda(){
   salvarRegistro('pedidos',doc.id,doc);
   // Não cancela o debounce - deixa salvarNaNuvem usar o ts correto do saveDB
 
-  // Atualiza contador atômico no Firebase em background
-  if(window.db&&window.currentUser){
-    const ref=window.db.collection('lojas').doc(window.currentUser.uid);
-    window.db.runTransaction(function(tx){
-      return tx.get(ref).then(function(d){
-        const cloud=d.exists&&d.data().seq_ped?d.data().seq_ped:0;
-        const proximo=Math.max(numLocal,cloud);
-        tx.set(ref,{seq_ped:proximo},{merge:true});
-        return proximo;
-      });
-    }).catch(function(e){console.warn('seq_ped sync erro:',e);});
-  }
+  // seq já é salvo no meta doc via saveDB → salvarNaNuvem (sem write extra)
 }
 
 
