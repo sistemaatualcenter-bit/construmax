@@ -5366,31 +5366,81 @@ function _abrirProduto(id){
     document.getElementById('mp-est').value=p.est||0;document.getElementById('mp-estmin').value=p.estMin||5;
     document.getElementById('mp-cat').value=p.cat||'';document.getElementById('mp-for').value=p.forid||'';
     calcMg();
-    const vendas=[];
-    DB.pedidos.filter(d=>isAtivo(d)).forEach(d=>{d.itens.filter(it=>it.pid===id).forEach(it=>vendas.push({num:d.num,dt:d.dt,cliNome:d.cliNome,qtd:it.qtd,punit:it.punit}));});
-    // Histórico de entradas com fornecedor
-    const nfes=[];DB.entradas.forEach(e=>{e.itens?.filter(it=>it.pid===id).forEach(it=>nfes.push({nfnum:e.nfnum,dt:e.dt,forNome:e.forNome,qtd:it.qtd,custo:it.custo,pvenda:it.pvenda||0}));});
-    // Histórico direto no produto (capturado em salvarEntrada)
-    const histEnt=p.histEntradas||nfes;
-    document.getElementById('mp-hist-content').innerHTML=`
-      <div style="margin-bottom:14px">
-        <div style="font-weight:700;font-size:12px;color:var(--or);margin-bottom:7px">📥 ENTRADAS (${histEnt.length})</div>
-        ${histEnt.length?`<div class="tw"><table><thead><tr><th>NF</th><th>Data</th><th>Fornecedor</th><th>Qtd</th><th>Custo</th><th>Pr.Venda</th></tr></thead><tbody>${
-          histEnt.map(n=>`<tr><td style="color:var(--bl);font-weight:700">${n.nfnum}</td><td>${n.dt}</td><td>${n.forNome||'--'}</td><td>${n.qtd}</td><td>${fmt(n.custo)}</td><td style="color:var(--gn)">${n.pvenda>0?fmt(n.pvenda):'--'}</td></tr>`).join('')
-        }</tbody></table></div>`:'<div class="es">Nenhuma entrada registrada</div>'}
-      </div>
-      <div>
-        <div style="font-weight:700;font-size:12px;color:var(--gn);margin-bottom:7px">🛒 VENDAS (${vendas.length})</div>
-        ${vendas.length?`<div class="tw"><table><thead><tr><th>Doc</th><th>Data</th><th>Cliente</th><th>Qtd</th><th>Preço</th></tr></thead><tbody>${
-          vendas.slice().reverse().map(v=>`<tr><td style="color:var(--or);font-weight:700">${v.num}</td><td>${v.dt}</td><td>${v.cliNome}</td><td>${v.qtd}</td><td>${fmt(v.punit)}</td></tr>`).join('')
-        }</tbody></table></div>`:'<div class="es">Nenhuma venda</div>'}
-      </div>`;
+    window._histProdId=id;
+    renderHistProduto(id);
     const nfesList=[];DB.entradas.forEach(e=>{e.itens?.filter(it=>it.pid===id).forEach(it=>nfesList.push({nfnum:e.nfnum,dt:e.dt,qtd:it.qtd,custo:it.custo}));});
     document.getElementById('mp-nfe-list').innerHTML=nfesList.length?`<div class="tw"><table><thead><tr><th>NF</th><th>Data</th><th>Qtd</th><th>Custo</th></tr></thead><tbody>${
       nfesList.map(n=>`<tr><td>${n.nfnum}</td><td>${n.dt}</td><td>${n.qtd}</td><td>${fmt(n.custo)}</td></tr>`).join('')
     }</tbody></table></div>`:`<div class="es">Nenhuma NF-e</div>`;
   }
   openMD('prd');
+}
+function renderHistProduto(id){
+  if(!id)id=window._histProdId;
+  if(!id)return;
+  const p=DB.produtos.find(x=>x.id===id);
+  const dtDe=document.getElementById('hp-dt-de')?.value||'';
+  const dtAte=document.getElementById('hp-dt-ate')?.value||'';
+  // Vendas
+  var vendas=[];
+  DB.pedidos.filter(d=>isAtivo(d)).forEach(d=>{
+    d.itens.filter(it=>it.pid===id).forEach(it=>{
+      vendas.push({num:d.num,dt:d.dt,dtISO:d.dtISO||'',cliNome:d.cliNome,qtd:it.qtd,punit:it.punit});
+    });
+  });
+  // Entradas
+  var nfes=[];
+  DB.entradas.forEach(e=>{
+    (e.itens||[]).filter(it=>it.pid===id).forEach(it=>{
+      nfes.push({nfnum:e.nfnum,dt:e.dt,dtISO:e.dtISO||'',forNome:e.forNome,qtd:it.qtd,custo:it.custo,pvenda:it.pvenda||0});
+    });
+  });
+  var histEnt=(p&&p.histEntradas)?p.histEntradas:nfes;
+  // Aplica filtro de data
+  function filtrar(arr){
+    return arr.filter(function(r){
+      var d=String(r.dtISO||r.dt||'').slice(0,10);
+      if(d.includes('/'))d=d.split('/').reverse().join('-');
+      if(dtDe&&d<dtDe)return false;
+      if(dtAte&&d>dtAte)return false;
+      return true;
+    });
+  }
+  var vendasF=filtrar(vendas);
+  var entF=filtrar(histEnt);
+  var totalQtdVendas=vendasF.reduce(function(s,v){return s+v.qtd;},0);
+  var totalQtdEnt=entF.reduce(function(s,e){return s+e.qtd;},0);
+  var totalValVendas=vendasF.reduce(function(s,v){return s+(v.qtd*v.punit);},0);
+  document.getElementById('mp-hist-content').innerHTML=
+    '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">'
+    +'<label style="font-size:11px;color:var(--mt)">De</label>'
+    +'<input class="inp" type="date" id="hp-dt-de" value="'+dtDe+'" onchange="renderHistProduto()" style="flex:1;min-width:120px">'
+    +'<label style="font-size:11px;color:var(--mt)">Até</label>'
+    +'<input class="inp" type="date" id="hp-dt-ate" value="'+dtAte+'" onchange="renderHistProduto()" style="flex:1;min-width:120px">'
+    +'</div>'
+    +'<div style="display:flex;gap:8px;margin-bottom:12px">'
+    +'<div style="flex:1;background:var(--card2);border-radius:8px;padding:8px 10px;text-align:center">'
+    +'<div style="font-size:10px;color:var(--mt)">Qtd Vendida</div>'
+    +'<div style="font-size:16px;font-weight:800;color:var(--gn)">'+totalQtdVendas+'</div>'
+    +'<div style="font-size:10px;color:var(--mt)">'+fmt(totalValVendas)+'</div>'
+    +'</div>'
+    +'<div style="flex:1;background:var(--card2);border-radius:8px;padding:8px 10px;text-align:center">'
+    +'<div style="font-size:10px;color:var(--mt)">Qtd Entrada</div>'
+    +'<div style="font-size:16px;font-weight:800;color:var(--or)">'+totalQtdEnt+'</div>'
+    +'</div>'
+    +'</div>'
+    +'<div style="margin-bottom:14px">'
+    +'<div style="font-weight:700;font-size:12px;color:var(--or);margin-bottom:7px">📥 ENTRADAS ('+entF.length+')</div>'
+    +(entF.length?'<div class="tw"><table><thead><tr><th>NF</th><th>Data</th><th>Fornecedor</th><th>Qtd</th><th>Custo</th><th>Pr.Venda</th></tr></thead><tbody>'
+      +entF.map(function(n){return'<tr><td style="color:var(--bl);font-weight:700">'+n.nfnum+'</td><td>'+n.dt+'</td><td>'+(n.forNome||'--')+'</td><td>'+n.qtd+'</td><td>'+fmt(n.custo)+'</td><td style="color:var(--gn)">'+(n.pvenda>0?fmt(n.pvenda):'--')+'</td></tr>';}).join('')
+      +'</tbody></table></div>':'<div class="es">Nenhuma entrada no período</div>')
+    +'</div>'
+    +'<div>'
+    +'<div style="font-weight:700;font-size:12px;color:var(--gn);margin-bottom:7px">🛒 VENDAS ('+vendasF.length+')</div>'
+    +(vendasF.length?'<div class="tw"><table><thead><tr><th>Doc</th><th>Data</th><th>Cliente</th><th>Qtd</th><th>Preço</th></tr></thead><tbody>'
+      +vendasF.slice().reverse().map(function(v){return'<tr><td style="color:var(--or);font-weight:700">'+v.num+'</td><td>'+v.dt+'</td><td>'+v.cliNome+'</td><td>'+v.qtd+'</td><td>'+fmt(v.punit)+'</td></tr>';}).join('')
+      +'</tbody></table></div>':'<div class="es">Nenhuma venda no período</div>')
+    +'</div>';
 }
 function salvarProduto(){
   const nome=document.getElementById('mp-nome').value.trim();
