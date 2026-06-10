@@ -2488,6 +2488,7 @@ function salvarNaNuvem(ts){
   // Executa batch — uma única operação de rede
   batch.commit().then(function(){
     window._cmxDirty={};  // limpa flags após save bem-sucedido
+    window._retryCount=0; // reseta contador de retentativas
     // Atualiza hashes para evitar reescritas desnecessárias
     window._lastHashes.clientes=quickHash(metaClientes.clientes||'');
     window._lastHashes.fin=quickHash((metaFin.boletos||'')+(metaFin.despesas||''));
@@ -2501,20 +2502,23 @@ function salvarNaNuvem(ts){
   }).catch(function(e){
     const code=e.code||'';
     const msg=(e.message||'').toLowerCase();
-    const isNetwork=msg.includes('transport')||msg.includes('network')||
-                    msg.includes('stream')||code==='unavailable';
+    const isNetwork=(msg.includes('transport')||msg.includes('network')||
+                    code==='unavailable')&&code!=='resource-exhausted';
     cmxLog(isNetwork?'WARN':'ERROR',
            isNetwork?'Falha de rede — retry em 8s':'Erro ao salvar no Firebase',
            (code||'')+' '+(e.message||''));
     _firebaseSavePending=false;
     _nuvemSaving=false;
     showSI('saved');
-    // Retry automático apenas para erros de rede (não para erros permanentes)
-    if(isNetwork&&!_nuvemTimer){
+    // Retry automático apenas para erros de rede (máx 2 tentativas)
+    window._retryCount=(window._retryCount||0)+1;
+    if(isNetwork&&!_nuvemTimer&&window._retryCount<=2){
       setTimeout(function(){
-        cmxLog('INFO','Tentando salvar novamente após falha de rede','');
+        cmxLog('INFO','Tentando salvar novamente após falha de rede','tentativa '+window._retryCount);
         saveDB();
       },8000);
+    } else {
+      window._retryCount=0;
     }
   });
 }
@@ -9240,15 +9244,7 @@ function filtrarGrosseiro(){
   sincFiltrosGro();
   renderRelGrosseiro();
 }
-function filtrarGrosseiro(){
-  // Sincroniza os dois blocos de filtro — pega o que tiver valor
-  const ini=document.getElementById('rel-gro-ini')?.value||document.getElementById('rel-gross-ini')?.value||'';
-  const fim=document.getElementById('rel-gro-fim')?.value||document.getElementById('rel-gross-fim')?.value||'';
-  // Copia para ambos os blocos para garantir consistência
-  ['rel-gro-ini','rel-gross-ini'].forEach(function(id){const el=document.getElementById(id);if(el)el.value=ini;});
-  ['rel-gro-fim','rel-gross-fim'].forEach(function(id){const el=document.getElementById(id);if(el)el.value=fim;});
-  renderRelGrosseiro();
-}
+
 function limparRelGrosseiro(){
   ['rel-gro-ini','rel-gro-fim','rel-gross-ini','rel-gross-fim'].forEach(function(id){
     const el=document.getElementById(id);
