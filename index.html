@@ -2369,11 +2369,11 @@ function saveDB(){
       _nuvemTimer=setTimeout(function(){
         _nuvemTimer=null;
         salvarNaNuvem(parseInt(localStorage.getItem(KEY+'_ts')||Date.now()));
-      },6000);
+      },10000);
       return;
     }
     salvarNaNuvem(ts);
-  },6000);
+  },10000);
 }
 
 // ── Helper: retorna chave do documento por MÊS (evita limite 1MB do Firestore) ──
@@ -2471,11 +2471,23 @@ function salvarNaNuvem(ts){
   if((dirty.all||dirty.op)&&hOp!==window._lastHashes.op){
     batch.set(col.doc('meta_op'),metaOp);writeCount++;
   }
-  var prodStr=JSON.stringify(DB.produtos||[]);
-  var hPrd=quickHash(prodStr);
-  if((dirty.all||dirty.produtos)&&hPrd!==window._lastHashes.produtos){
-    batch.set(col.doc('produtos'),{ts:timestamp,produtos:prodStr});writeCount++;
+  // Produtos: split em chunks de 2000 para não estourar 1MB por doc
+  var PROD_CHUNK=2000;
+  var allProds=DB.produtos||[];
+  var prodChunks=[];
+  for(var i=0;i<allProds.length;i+=PROD_CHUNK){
+    prodChunks.push(allProds.slice(i,i+PROD_CHUNK));
   }
+  if(!prodChunks.length)prodChunks.push([]);
+  var prodChanged=false;
+  prodChunks.forEach(function(chunk,idx){
+    var key=idx===0?'produtos':'produtos_'+idx;
+    var hPrd=quickHash(JSON.stringify(chunk));
+    if((dirty.all||dirty.produtos)&&hPrd!==(window._lastHashes['prod_'+idx]||'')){
+      batch.set(col.doc(key),{ts:timestamp,produtos:JSON.stringify(chunk)});writeCount++;
+      prodChanged=true;
+    }
+  });
   // Pedidos: só escreve os meses que mudaram
   var dirtyMonths=dirty.all?qKeys:(dirty.pedidosMeses||qKeys);
   dirtyMonths.forEach(function(k){
@@ -2485,21 +2497,64 @@ function salvarNaNuvem(ts){
   // meta POR ÚLTIMO — garante que ts só atualiza junto com os dados
   batch.set(col.doc('meta'),meta);writeCount++;
 
-  // Executa batch — uma única operação de rede
-  batch.commit().then(function(){
+  // Se batch tem poucos docs, executa direto. Se muitos, divide em sub-batches.
+  var MAX_PER_BATCH=5;
+  if(writeCount<=MAX_PER_BATCH){
+    batch.commit().then(onSaveSuccess).catch(onSaveError);
+  } else {
+    // Reconstrói em sub-batches de 5 docs com delay entre eles
+    // Coleta todas as operações pendentes
+    var ops=[];
+    // Recria as operações (batch já foi montado mas vamos refazer em partes)
+    // Na prática: escreve meta_clientes/fin/op/produtos primeiro, depois pedidos+meta
+    var batchA=window.db.batch();var countA=0;
+    var batchB=window.db.batch();var countB=0;
+    // Remonta: os docs não-pedidos vão no batchA, pedidos+meta no batchB
+    var hCli2=quickHash(metaClientes.clientes||'');
+    if((dirty.all||dirty.clientes)&&hCli2!==window._lastHashes.clientes){batchA.set(col.doc('meta_clientes'),metaClientes);countA++;}
+    var hFin2=quickHash((metaFin.boletos||'')+(metaFin.despesas||''));
+    if((dirty.all||dirty.fin)&&hFin2!==window._lastHashes.fin){batchA.set(col.doc('meta_fin'),metaFin);countA++;}
+    var hOp2=quickHash((metaOp.fornecedores||'')+(metaOp.entradas||'').slice(0,200));
+    if((dirty.all||dirty.op)&&hOp2!==window._lastHashes.op){batchA.set(col.doc('meta_op'),metaOp);countA++;}
+    var allProds2=DB.produtos||[];
+    for(var pi=0;pi<allProds2.length;pi+=2000){
+      var ck=allProds2.slice(pi,pi+2000);var ki=pi===0?'produtos':'produtos_'+(pi/2000);
+      var hp=quickHash(JSON.stringify(ck));
+      if((dirty.all||dirty.produtos)&&hp!==(window._lastHashes['prod_'+(pi/2000)]||'')){batchA.set(col.doc(ki),{ts:timestamp,produtos:JSON.stringify(ck)});countA++;}
+    }
+    // Pedidos + meta no batchB
+    dirtyMonths.forEach(function(k){
+      if(pedsByQ[k]) batchB.set(col.doc(k),{ts:timestamp,pedidos:JSON.stringify(pedsByQ[k])});countB++;
+    });
+    batchB.set(col.doc('meta'),meta);countB++;
+    // Executa batchA, depois espera 3s, depois batchB
+    var pA=countA>0?batchA.commit():Promise.resolve();
+    pA.then(function(){
+      return new Promise(function(resolve){setTimeout(resolve,3000);});
+    }).then(function(){
+      return batchB.commit();
+    }).then(onSaveSuccess).catch(onSaveError);
+  }
+  return;
+  function onSaveSuccess(){
     window._cmxDirty={};  // limpa flags após save bem-sucedido
     window._retryCount=0; // reseta contador de retentativas
     // Atualiza hashes para evitar reescritas desnecessárias
     window._lastHashes.clientes=quickHash(metaClientes.clientes||'');
     window._lastHashes.fin=quickHash((metaFin.boletos||'')+(metaFin.despesas||''));
     window._lastHashes.op=quickHash((metaOp.fornecedores||'')+(metaOp.entradas||'').slice(0,200));
-    window._lastHashes.produtos=quickHash(JSON.stringify(DB.produtos||[]));
+    // Atualiza hashes dos chunks de produtos
+    var _pc=DB.produtos||[];
+    for(var _i=0;_i<Math.ceil(_pc.length/2000);_i++){
+      window._lastHashes['prod_'+_i]=quickHash(JSON.stringify(_pc.slice(_i*2000,(_i+1)*2000)));
+    }
     _ultimoTsNuvem=timestamp;
     _firebaseSavePending=false;
     _nuvemSaving=false;
     showSI('saved');
     cmxLog('FIREBASE','Salvo (batch)',''+writeCount+' doc(s), '+peds.length+' pedidos');
-  }).catch(function(e){
+  }
+  function onSaveError(e){
     const code=e.code||'';
     const msg=(e.message||'').toLowerCase();
     const isNetwork=(msg.includes('transport')||msg.includes('network')||
@@ -2520,7 +2575,7 @@ function salvarNaNuvem(ts){
     } else {
       window._retryCount=0;
     }
-  });
+  }
 }
 function showSI(estado){
   const e=document.getElementById('si');
@@ -6416,7 +6471,7 @@ function confirmarPagBoleto(){
     return{...b,pago:true,dtPago:dt,valorPago:valor,obsPag:obs};
   });
   const _bdp=DB.boletos.find(b=>b.id===id);if(_bdp)salvarRegistro('boletos',id,_bdp);
-  saveDB();closeMD('boleto-pag');renderContasPagar();
+  markDirty('fin');saveDB();closeMD('boleto-pag');renderContasPagar();
   toast('✓ Pagamento registrado!','#10b981');
 }
 function filtForBoleto(){
@@ -7993,7 +8048,7 @@ function pagarDespesa(id){
     return{...d,pago:true,dtPago:dtHtml(),valorPago:d.valor};
   });
   const _ddp=DB.despesas.find(d=>d.id===id);if(_ddp)salvarRegistro('despesas',id,_ddp);
-  saveDB();renderDespesas();toast('✓ Despesa paga','#10b981');
+  markDirty('fin');saveDB();renderDespesas();toast('✓ Despesa paga','#10b981');
 }
 function delDespesa(id){
   if(!confirm('Remover esta despesa?'))return;
@@ -11817,7 +11872,13 @@ function sincronizarNuvem(){
         parceiros:   mo&&mo.exists?JSON.parse(mo.data().parceiros||'[]'):JSON.parse(m.parceiros||'[]'),
         tarefas:     mo&&mo.exists?JSON.parse(mo.data().tarefas||'[]'):JSON.parse(m.tarefas||'[]'),
         xmlMemoria:  mo&&mo.exists?JSON.parse(mo.data().xmlMemoria||'{}'):JSON.parse(m.xmlMemoria||'{}'),
-        produtos:    docs['produtos']&&docs['produtos'].exists?JSON.parse(docs['produtos'].data().produtos||'[]'):[],
+        produtos:    (function(){
+          var sp=[];
+          Object.keys(docs).filter(function(k){return k==='produtos'||/^produtos_\d+$/.test(k);})
+            .sort(function(a,b){var na=a==='produtos'?0:parseInt(a.split('_')[1]);var nb=b==='produtos'?0:parseInt(b.split('_')[1]);return na-nb;})
+            .forEach(function(k){if(docs[k]&&docs[k].exists){try{sp=sp.concat(JSON.parse(docs[k].data().produtos||'[]'));}catch(e){}}});
+          return sp;
+        })(),
         pedidos:     allPeds,
       };
       localStorage.setItem(KEY,JSON.stringify(DB));
@@ -12108,7 +12169,13 @@ window.auth.onAuthStateChanged(function(user){
         }
       });
       const metaDoc=D['meta']||{exists:false};
-      const prodDoc=D['produtos']||{exists:false};
+      // Produtos: mescla todos os chunks (produtos, produtos_1, produtos_2...)
+      var fbProds=[];
+      Object.keys(D).filter(function(k){return k==='produtos'||/^produtos_\d+$/.test(k);})
+        .sort(function(a,b){var na=a==='produtos'?0:parseInt(a.split('_')[1]);var nb=b==='produtos'?0:parseInt(b.split('_')[1]);return na-nb;})
+        .forEach(function(k){
+          if(D[k]&&D[k].exists){try{fbProds=fbProds.concat(JSON.parse(D[k].data().produtos||'[]'));}catch(e){}}
+        });
       const metaCli=D['meta_clientes'], metaFin=D['meta_fin'], metaOp=D['meta_op'];
       // Pedidos: usa mensais se existirem, senão legado. Dedup por ID.
       var fbPeds=monthlyPeds.length?monthlyPeds:legacyPeds;
@@ -12137,7 +12204,7 @@ window.auth.onAuthStateChanged(function(user){
             boletos:     metaFin&&metaFin.exists?JSON.parse(metaFin.data().boletos||'[]'):JSON.parse(m.boletos||'[]'),
             despesas:    metaFin&&metaFin.exists?JSON.parse(metaFin.data().despesas||'[]'):JSON.parse(m.despesas||'[]'),
             clientes:    metaCli&&metaCli.exists?JSON.parse(metaCli.data().clientes||'[]'):JSON.parse(m.clientes||'[]'),
-            produtos:    prodDoc.exists?JSON.parse(prodDoc.data().produtos||'[]'):[],
+            produtos:    fbProds,
             pedidos:     fbPeds,
           };
           // Proteção: mescla com localStorage se local tiver MAIS registros em alguma coleção
@@ -12166,6 +12233,20 @@ window.auth.onAuthStateChanged(function(user){
           localStorage.setItem(KEY,JSON.stringify(DB));
           localStorage.setItem(KEY+'_ts',String(metaDoc.data().ts||Date.now()));
           cmxLog('SYNC','Login: dados carregados',''+DB.pedidos.length+' pedidos, '+DB.clientes.length+' clientes');
+          // Inicializa hashes para que o primeiro save não reescreva tudo
+          try{
+            window._lastHashes=window._lastHashes||{};
+            var _mc={clientes:JSON.stringify(DB.clientes||[])};
+            window._lastHashes.clientes=quickHash(_mc.clientes);
+            var _bStr=JSON.stringify(DB.boletos||[]),_dStr=JSON.stringify(DB.despesas||[]);
+            window._lastHashes.fin=quickHash(_bStr+_dStr);
+            var _fStr=JSON.stringify(DB.fornecedores||[]),_eStr=JSON.stringify(DB.entradas||[]).slice(0,200);
+            window._lastHashes.op=quickHash(_fStr+_eStr);
+            var _pc=DB.produtos||[];
+            for(var _i=0;_i<Math.ceil(_pc.length/2000)||1;_i++){
+              window._lastHashes['prod_'+_i]=quickHash(JSON.stringify(_pc.slice(_i*2000,(_i+1)*2000)));
+            }
+          }catch(e){}
         }catch(e){
           console.warn('Erro ao montar DB da nuvem:',e);
           const local=localStorage.getItem(KEY);
