@@ -2314,8 +2314,11 @@ function renderLogViewer(){
 function markDirty(colecao){
   if(!window._cmxDirty)window._cmxDirty={};
   if(colecao==='pedidos'){
-    // Marca os meses dos pedidos recentemente modificados
-    window._cmxDirty.pedidosMeses=getPedidosDocKeys();
+    // Marca apenas o mês atual (pedidos novos/editados são sempre do mês corrente)
+    if(!window._cmxDirty.pedidosMeses)window._cmxDirty.pedidosMeses=[];
+    var mesAtual=getPedidosDocKey(new Date().toISOString());
+    if(window._cmxDirty.pedidosMeses.indexOf(mesAtual)<0)
+      window._cmxDirty.pedidosMeses.push(mesAtual);
   } else {
     window._cmxDirty[colecao]=true;
   }
@@ -2369,11 +2372,11 @@ function saveDB(){
       _nuvemTimer=setTimeout(function(){
         _nuvemTimer=null;
         salvarNaNuvem(parseInt(localStorage.getItem(KEY+'_ts')||Date.now()));
-      },10000);
+      },15000);
       return;
     }
     salvarNaNuvem(ts);
-  },10000);
+  },15000);
 }
 
 // ── Helper: retorna chave do documento por MÊS (evita limite 1MB do Firestore) ──
@@ -2407,176 +2410,121 @@ function salvarNaNuvem(ts){
   if(!window.db || !window.currentUser) return;
   if(_nuvemSaving){console.log('[FIREBASE] write em andamento, aguardando...');return;}
   _nuvemSaving=true;
-  // Sempre salva quando chamada (debounce no saveDB já evita chamadas excessivas)
   const uid = window.currentUser.uid;
   const timestamp = ts || parseInt(localStorage.getItem(KEY+'_ts')||'0') || Date.now();
-  const updatedAt = new Date().toISOString();
+  const col = window.db.collection('lojas').doc(uid).collection('d');
   const peds = DB.pedidos||[];
-  // Agrupa pedidos por trimestre (ex: pedidos_2026_Q1)
+  // Agrupa pedidos por mês
   const pedsByQ={};
   peds.forEach(function(p){
-    const k=getPedidosDocKey(p.dtISO||p.dt||'');
+    const k=getPedidosDocKey(p);
     if(!pedsByQ[k])pedsByQ[k]=[];
     pedsByQ[k].push(p);
   });
-  // meta dividido em 4 documentos para reduzir reescrita desnecessária
+  const qKeys=Object.keys(pedsByQ);
+  // Prepara documentos meta
   const meta = {
-    ts:timestamp, updatedAt:updatedAt,
+    ts: timestamp,
     config:JSON.stringify(DB.config||{}),
     seq:JSON.stringify(DB.seq||{}),
     categorias:JSON.stringify(DB.categorias||[]),
     familias:JSON.stringify(DB.familias||[]),
     campanhas:JSON.stringify(DB.campanhas||[]),
-    totalPedidos:peds.length,
   };
   const metaClientes = {
-    ts:timestamp,
-    clientes:JSON.stringify(DB.clientes||[]),
+    clientes: JSON.stringify(DB.clientes||[]),
+    ts: timestamp,
   };
   const metaFin = {
-    ts:timestamp,
-    boletos:JSON.stringify(DB.boletos||[]),
-    despesas:JSON.stringify(DB.despesas||[]),
+    boletos:  JSON.stringify(DB.boletos||[]),
+    despesas: JSON.stringify(DB.despesas||[]),
+    ts: timestamp,
   };
   const metaOp = {
-    ts:timestamp,
     fornecedores:JSON.stringify(DB.fornecedores||[]),
-    entradas:JSON.stringify(DB.entradas||[]),
-    devolucoes:JSON.stringify(DB.devolucoes||[]),
-    parceiros:JSON.stringify(DB.parceiros||[]),
-    tarefas:JSON.stringify(DB.tarefas||[]),
-    xmlMemoria:JSON.stringify(DB.xmlMemoria||{}),
+    entradas:    JSON.stringify(DB.entradas||[]),
+    devolucoes:  JSON.stringify(DB.devolucoes||[]),
+    parceiros:   JSON.stringify(DB.parceiros||[]),
+    tarefas:     JSON.stringify(DB.tarefas||[]),
+    xmlMemoria:  JSON.stringify(DB.xmlMemoria||'{}'),
+    ts: timestamp,
   };
-  // Escrita SELETIVA: só grava o que mudou desde o último save
-  const col = window.db.collection('lojas').doc(uid).collection('d');
-  const qKeys=Object.keys(pedsByQ);
-  const dirty=window._cmxDirty||{all:true};
-
-  // Monta lista de writes necessários
-  // Usa Firebase Batch Write — todos os docs salvam como UMA operação atômica
-  // Evita resource-exhausted (fila de writes) e garante consistência
+  const dirty=window._cmxDirty||{};
+  window._lastHashes=window._lastHashes||{};
+  // Monta UM batch com APENAS os docs que realmente mudaram
   var batch=window.db.batch();
   var writeCount=0;
-
-  // Outros docs: só escreve se o conteúdo mudou (hash diferente do último save)
-  var hCli=quickHash(metaClientes.clientes||'');
-  if((dirty.all||dirty.clientes)&&hCli!==window._lastHashes.clientes){
-    batch.set(col.doc('meta_clientes'),metaClientes);writeCount++;
-  }
-  var hFin=quickHash((metaFin.boletos||'')+(metaFin.despesas||''));
-  if((dirty.all||dirty.fin)&&hFin!==window._lastHashes.fin){
-    batch.set(col.doc('meta_fin'),metaFin);writeCount++;
-  }
-  var hOp=quickHash((metaOp.fornecedores||'')+(metaOp.entradas||'').slice(0,200));
-  if((dirty.all||dirty.op)&&hOp!==window._lastHashes.op){
-    batch.set(col.doc('meta_op'),metaOp);writeCount++;
-  }
-  // Produtos: split em chunks de 2000 para não estourar 1MB por doc
-  var PROD_CHUNK=2000;
-  var allProds=DB.produtos||[];
-  var prodChunks=[];
-  for(var i=0;i<allProds.length;i+=PROD_CHUNK){
-    prodChunks.push(allProds.slice(i,i+PROD_CHUNK));
-  }
-  if(!prodChunks.length)prodChunks.push([]);
-  var prodChanged=false;
-  prodChunks.forEach(function(chunk,idx){
-    var key=idx===0?'produtos':'produtos_'+idx;
-    var hPrd=quickHash(JSON.stringify(chunk));
-    if((dirty.all||dirty.produtos)&&hPrd!==(window._lastHashes['prod_'+idx]||'')){
-      batch.set(col.doc(key),{ts:timestamp,produtos:JSON.stringify(chunk)});writeCount++;
-      prodChanged=true;
-    }
-  });
-  // Pedidos: só escreve os meses que mudaram
-  var dirtyMonths=dirty.all?qKeys:(dirty.pedidosMeses||qKeys);
-  dirtyMonths.forEach(function(k){
-    if(pedsByQ[k])
-      batch.set(col.doc(k),{ts:timestamp,pedidos:JSON.stringify(pedsByQ[k])});writeCount++;
-  });
-  // meta POR ÚLTIMO — garante que ts só atualiza junto com os dados
+  // meta: sempre (contém ts)
   batch.set(col.doc('meta'),meta);writeCount++;
-
-  // Se batch tem poucos docs, executa direto. Se muitos, divide em sub-batches.
-  var MAX_PER_BATCH=5;
-  if(writeCount<=MAX_PER_BATCH){
-    batch.commit().then(onSaveSuccess).catch(onSaveError);
-  } else {
-    // Reconstrói em sub-batches de 5 docs com delay entre eles
-    // Coleta todas as operações pendentes
-    var ops=[];
-    // Recria as operações (batch já foi montado mas vamos refazer em partes)
-    // Na prática: escreve meta_clientes/fin/op/produtos primeiro, depois pedidos+meta
-    var batchA=window.db.batch();var countA=0;
-    var batchB=window.db.batch();var countB=0;
-    // Remonta: os docs não-pedidos vão no batchA, pedidos+meta no batchB
-    var hCli2=quickHash(metaClientes.clientes||'');
-    if((dirty.all||dirty.clientes)&&hCli2!==window._lastHashes.clientes){batchA.set(col.doc('meta_clientes'),metaClientes);countA++;}
-    var hFin2=quickHash((metaFin.boletos||'')+(metaFin.despesas||''));
-    if((dirty.all||dirty.fin)&&hFin2!==window._lastHashes.fin){batchA.set(col.doc('meta_fin'),metaFin);countA++;}
-    var hOp2=quickHash((metaOp.fornecedores||'')+(metaOp.entradas||'').slice(0,200));
-    if((dirty.all||dirty.op)&&hOp2!==window._lastHashes.op){batchA.set(col.doc('meta_op'),metaOp);countA++;}
-    var allProds2=DB.produtos||[];
-    for(var pi=0;pi<allProds2.length;pi+=2000){
-      var ck=allProds2.slice(pi,pi+2000);var ki=pi===0?'produtos':'produtos_'+(pi/2000);
-      var hp=quickHash(JSON.stringify(ck));
-      if((dirty.all||dirty.produtos)&&hp!==(window._lastHashes['prod_'+(pi/2000)]||'')){batchA.set(col.doc(ki),{ts:timestamp,produtos:JSON.stringify(ck)});countA++;}
-    }
-    // Pedidos + meta no batchB
-    dirtyMonths.forEach(function(k){
-      if(pedsByQ[k]) batchB.set(col.doc(k),{ts:timestamp,pedidos:JSON.stringify(pedsByQ[k])});countB++;
-    });
-    batchB.set(col.doc('meta'),meta);countB++;
-    // Executa batchA, depois espera 3s, depois batchB
-    var pA=countA>0?batchA.commit():Promise.resolve();
-    pA.then(function(){
-      return new Promise(function(resolve){setTimeout(resolve,3000);});
-    }).then(function(){
-      return batchB.commit();
-    }).then(onSaveSuccess).catch(onSaveError);
+  // clientes
+  if(dirty.all||dirty.clientes){
+    var h=quickHash(metaClientes.clientes);
+    if(h!==window._lastHashes.clientes){batch.set(col.doc('meta_clientes'),metaClientes);writeCount++;}
   }
-  return;
-  function onSaveSuccess(){
-    window._cmxDirty={};  // limpa flags após save bem-sucedido
-    window._retryCount=0; // reseta contador de retentativas
-    // Atualiza hashes para evitar reescritas desnecessárias
-    window._lastHashes.clientes=quickHash(metaClientes.clientes||'');
-    window._lastHashes.fin=quickHash((metaFin.boletos||'')+(metaFin.despesas||''));
-    window._lastHashes.op=quickHash((metaOp.fornecedores||'')+(metaOp.entradas||'').slice(0,200));
-    // Atualiza hashes dos chunks de produtos
+  // financeiro
+  if(dirty.all||dirty.fin){
+    var h=quickHash(metaFin.boletos+metaFin.despesas);
+    if(h!==window._lastHashes.fin){batch.set(col.doc('meta_fin'),metaFin);writeCount++;}
+  }
+  // operacional
+  if(dirty.all||dirty.op){
+    var h=quickHash(metaOp.fornecedores+metaOp.entradas.slice(0,200));
+    if(h!==window._lastHashes.op){batch.set(col.doc('meta_op'),metaOp);writeCount++;}
+  }
+  // produtos (chunks de 2000)
+  if(dirty.all||dirty.produtos){
+    var allProds=DB.produtos||[];
+    for(var i=0;i<allProds.length;i+=2000){
+      var chunk=allProds.slice(i,i+2000);
+      var idx=i/2000;
+      var key=idx===0?'produtos':'produtos_'+idx;
+      var h=quickHash(JSON.stringify(chunk));
+      if(h!==(window._lastHashes['prod_'+idx]||'')){batch.set(col.doc(key),{ts:timestamp,produtos:JSON.stringify(chunk)});writeCount++;}
+    }
+  }
+  // pedidos (só meses que mudaram)
+  // Pedidos: só escreve meses explicitamente marcados (NUNCA todos de uma vez)
+  var dirtyMonths=dirty.pedidosMeses||[];
+  dirtyMonths.forEach(function(k){
+    if(pedsByQ[k]){batch.set(col.doc(k),{ts:timestamp,pedidos:JSON.stringify(pedsByQ[k])});writeCount++;}
+  });
+  // Se só tem meta (nada mudou de verdade), cancela
+  if(writeCount<=1){
+    _nuvemSaving=false;_firebaseSavePending=false;showSI('saved');
+    return;
+  }
+  cmxLog('FIREBASE','Enviando batch',''+writeCount+' doc(s)');
+  batch.commit().then(function(){
+    window._cmxDirty={};
+    window._retryCount=0;
+    // Atualiza hashes
+    window._lastHashes.clientes=quickHash(metaClientes.clientes);
+    window._lastHashes.fin=quickHash(metaFin.boletos+metaFin.despesas);
+    window._lastHashes.op=quickHash(metaOp.fornecedores+metaOp.entradas.slice(0,200));
     var _pc=DB.produtos||[];
-    for(var _i=0;_i<Math.ceil(_pc.length/2000);_i++){
+    for(var _i=0;_i<Math.ceil(_pc.length/2000)||1;_i++){
       window._lastHashes['prod_'+_i]=quickHash(JSON.stringify(_pc.slice(_i*2000,(_i+1)*2000)));
     }
     _ultimoTsNuvem=timestamp;
     _firebaseSavePending=false;
     _nuvemSaving=false;
     showSI('saved');
-    cmxLog('FIREBASE','Salvo (batch)',''+writeCount+' doc(s), '+peds.length+' pedidos');
-  }
-  function onSaveError(e){
-    const code=e.code||'';
-    const msg=(e.message||'').toLowerCase();
-    const isNetwork=(msg.includes('transport')||msg.includes('network')||
-                    code==='unavailable')&&code!=='resource-exhausted';
-    cmxLog(isNetwork?'WARN':'ERROR',
-           isNetwork?'Falha de rede — retry em 8s':'Erro ao salvar no Firebase',
-           (code||'')+' '+(e.message||''));
+    cmxLog('FIREBASE','Salvo',''+writeCount+' doc(s), '+peds.length+' pedidos');
+  }).catch(function(e){
+    var code=e.code||'';
+    var msg=(e.message||'').toLowerCase();
+    var isNetwork=(msg.includes('transport')||msg.includes('network')||code==='unavailable')&&code!=='resource-exhausted';
+    cmxLog(isNetwork?'WARN':'ERROR',isNetwork?'Falha de rede':'Erro Firebase',(code)+' '+(e.message||''));
     _firebaseSavePending=false;
     _nuvemSaving=false;
     showSI('saved');
-    // Retry automático apenas para erros de rede (máx 2 tentativas)
     window._retryCount=(window._retryCount||0)+1;
     if(isNetwork&&!_nuvemTimer&&window._retryCount<=2){
-      setTimeout(function(){
-        cmxLog('INFO','Tentando salvar novamente após falha de rede','tentativa '+window._retryCount);
-        saveDB();
-      },8000);
-    } else {
-      window._retryCount=0;
-    }
-  }
+      setTimeout(function(){saveDB();},10000);
+    } else {window._retryCount=0;}
+  });
 }
+
 function showSI(estado){
   const e=document.getElementById('si');
   if(!e)return;
@@ -10873,6 +10821,9 @@ function confirImp(){
   // Salva na nuvem em 4 documentos (sem limite 1MB)
   toast('⏳ Salvando na nuvem...','#f59e0b');
   if(window.db&&window.currentUser){
+    // Marca TUDO como dirty para que o backup completo suba ao Firebase
+    window._cmxDirty={all:true,clientes:true,fin:true,op:true,produtos:true,pedidosMeses:getPedidosDocKeys()};
+    window._lastHashes={};  // reseta hashes para forçar escrita
     salvarNaNuvem(ts);
     setTimeout(function(){
       showSI();
@@ -12114,8 +12065,10 @@ function iniciarAutoBackup(){
   }
 
   window.addEventListener('beforeunload',function(ev){
-    // Flush debounce ao fechar/recarregar
-    if(_nuvemTimer){clearTimeout(_nuvemTimer);_nuvemTimer=null;if(!_nuvemSaving)salvarNaNuvem();}
+    // Cancela debounce pendente (dados já estão no localStorage)
+    if(_nuvemTimer){clearTimeout(_nuvemTimer);_nuvemTimer=null;}
+    // Salva localStorage uma última vez para garantir
+    try{localStorage.setItem(KEY,JSON.stringify(DB));localStorage.setItem(KEY+'_ts',String(Date.now()));}catch(e){}
     // Avisa se há dados não salvos no Firebase
     if(_firebaseSavePending){
       ev.preventDefault();
@@ -12262,7 +12215,11 @@ window.auth.onAuthStateChanged(function(user){
         cmxLog('SYNC','Local mais recente — mesclado com Firebase antes de upload','local+fb='+DB.pedidos.length);
         // migrarPedidosTrimestrais (após initApp) vai recuperar os docs mensais também
         // Aguarda 2s para a migração rodar antes de subir tudo
-        setTimeout(function(){salvarNaNuvem(Date.now());},2500);
+        setTimeout(function(){
+          window._cmxDirty={all:true,clientes:true,fin:true,op:true,produtos:true,pedidosMeses:getPedidosDocKeys()};
+          window._lastHashes={};
+          salvarNaNuvem(Date.now());
+        },2500);
       } else {
         // Nuvem vazia — sobe o local para a nuvem
         const local=localStorage.getItem(KEY);
