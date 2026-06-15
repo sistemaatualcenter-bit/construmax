@@ -2326,49 +2326,40 @@ function markDirty(colecao){
 
 function saveDB(){
   const ts = Date.now();
-  // Limpa backups antigos do localStorage
-  ['cmx4_auto_bk_0','cmx4_auto_bk_1','cmx4_auto_bk_2',
-   'cmx4_auto_bk_exit','cmx4_auto_bk_0_dt','cmx4_auto_bk_1_dt',
-   'cmx4_auto_bk_2_dt','cmx4_auto_bk_exit_dt'].forEach(function(k){
-    try{localStorage.removeItem(k);}catch(ex){}
-  });
-  try{
-    localStorage.setItem(KEY, JSON.stringify(DB));
-    localStorage.setItem(KEY+'_ts', String(ts));
-  }catch(e){
-    // localStorage cheio — salva versão reduzida (só pedidos dos últimos 120 dias + em aberto)
-    // Os dados COMPLETOS continuam na memória (DB) e no Firebase
-    cmxLog('WARN','localStorage cheio — salvando versão reduzida local',e.name);
-    try{
-      const corte=new Date();corte.setDate(corte.getDate()-120);
-      const corteISO=corte.toISOString().slice(0,10);
-      const dbReduzido=Object.assign({},DB,{
-        pedidos:(DB.pedidos||[]).filter(function(p){
-          const dt=String(p.dtISO||p.dt||'').slice(0,10);
-          const emAberto=!['pago','cancelado','mesclado-pago','convertido'].includes(p.st);
-          return emAberto||dt>=corteISO;
-        })
-      });
-      localStorage.setItem(KEY, JSON.stringify(dbReduzido));
-      localStorage.setItem(KEY+'_ts', String(ts));
-      cmxLog('INFO','Versão reduzida salva no local','pedidos local: '+dbReduzido.pedidos.length+' de '+DB.pedidos.length);
-    }catch(e2){
-      cmxLog('ERROR','Falha ao salvar local mesmo reduzido','Firebase é o backup principal');
-    }
-  }
   _firebaseSavePending=true;
   showSI('pending');
   // Se não houver markDirty específico, marca all=true (escreve tudo — seguro)
   if(!window._cmxDirty||Object.keys(window._cmxDirty).length===0){
     window._cmxDirty={all:true};
   }
-  cmxLog('INFO','saveDB executado','localPeds='+DB.pedidos.length+' localProds='+DB.produtos.length);
-  // Debounce 4s: agrupa saves consecutivos em um único write no Firebase
+  // localStorage em background (não trava a UI)
+  setTimeout(function(){
+    try{
+      localStorage.setItem(KEY, JSON.stringify(DB));
+      localStorage.setItem(KEY+'_ts', String(ts));
+    }catch(e){
+      try{
+        var corte=new Date();corte.setDate(corte.getDate()-120);
+        var corteISO=corte.toISOString().slice(0,10);
+        var dbReduzido=Object.assign({},DB,{
+          pedidos:(DB.pedidos||[]).filter(function(p){
+            var dt=String(p.dtISO||p.dt||'').slice(0,10);
+            return!['pago','cancelado','mesclado-pago','convertido'].includes(p.st)||dt>=corteISO;
+          })
+        });
+        localStorage.setItem(KEY, JSON.stringify(dbReduzido));
+        localStorage.setItem(KEY+'_ts', String(ts));
+        cmxLog('WARN','localStorage cheio — versão reduzida salva','');
+      }catch(e2){
+        cmxLog('ERROR','Falha ao salvar local','Firebase é o backup principal');
+      }
+    }
+  },0);
+  // Debounce Firebase
   if(_nuvemTimer) clearTimeout(_nuvemTimer);
   _nuvemTimer=setTimeout(function(){
     _nuvemTimer=null;
     if(_nuvemSaving){
-      // Write em andamento - reagenda com ts fresco
       _nuvemTimer=setTimeout(function(){
         _nuvemTimer=null;
         salvarNaNuvem(parseInt(localStorage.getItem(KEY+'_ts')||Date.now()));
@@ -11884,6 +11875,8 @@ function finalizarComanda(){
   const suc=document.getElementById('cmd-sucesso');
   if(suc){suc.style.display='block';suc.textContent='✓ '+numStr+' salvo! Total: '+fmt(total);}
   document.getElementById('cmd-btn-imprimir').style.display='block';
+  document.getElementById('cmd-pag').value='';
+  atualizarPrazoComanda();
   document.getElementById('cmd-prd-src').focus();
   setTimeout(function(){
     if(suc)suc.style.display='none';
