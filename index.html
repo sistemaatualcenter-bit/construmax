@@ -6023,7 +6023,7 @@ function relatorioFornecedor(forId){
     modal.id='md-rel-for';modal.className='md';
     modal.style.cssText='display:none;max-width:850px';
     modal.innerHTML='<div class="mh"><div class="mt2x">📋 Relatório de Compras</div><button class="btn bg bsm" onclick="closeMD('+"'"+'rel-for'+"'"+')">✕</button></div><div id="md-rel-for-body"></div>';
-    document.getElementById('app').appendChild(modal);
+    document.body.appendChild(modal);
   }
   document.getElementById('md-rel-for-body').innerHTML=html;
   openMD('rel-for');
