@@ -2515,7 +2515,7 @@ function salvarNaNuvem(ts){
     var code=e.code||'';
     var msg=(e.message||'').toLowerCase();
     var isNetwork=(msg.includes('transport')||msg.includes('network')||code==='unavailable')&&code!=='resource-exhausted';
-    cmxLog(isNetwork?'WARN':'ERROR',isNetwork?'Falha de rede':'Erro Firebase',(code)+' '+(e.message||''));
+    cmxLog(isNetwork?'WARN':'ERROR',isNetwork?'Falha de rede':'Erro Firebase',code+' '+String(e.message||'').slice(0,100));
     _firebaseSavePending=false;
     _nuvemSaving=false;
     showSI('saved');
@@ -3255,6 +3255,41 @@ function fichaCliente(id){
     renderFichaCliente(id);
   });
 }
+// Aplica desconto rápido direto da ficha do cliente
+function aplicarDescontoRapido(pedId,cliId){
+  var inp=document.getElementById('fdesc-'+pedId);
+  if(!inp)return;
+  var novoDesc=parseFloat(inp.value)||0;
+  if(novoDesc<0||novoDesc>100){toast('⚠ Desconto deve ser entre 0 e 100%','#f59e0b');return;}
+  var d=DB.pedidos.find(p=>p.id===pedId);
+  if(!d)return;
+  var sub=d.itens.reduce(function(s,it){return s+(it.qtd||0)*(it.punit||0);},0);
+  var descTipo=d.descTipo||'%';
+  var descVal=descTipo==='%'?sub*novoDesc/100:novoDesc;
+  d.desc=novoDesc;d.descTipo=descTipo;
+  d.total=Math.round((sub-descVal)*100)/100;
+  markDirty('pedidos');saveDB();
+  renderFichaCliente(cliId,'aberto');
+  toast('✓ Desconto atualizado: '+novoDesc+'%','#10b981');
+}
+
+// Registra pagamento rápido direto da ficha do cliente
+function pgtoRapidoFicha(pedId,cliId){
+  var inp=document.getElementById('fpgto-'+pedId);
+  if(!inp)return;
+  var valor=parseFloat(inp.value)||0;
+  var d=DB.pedidos.find(p=>p.id===pedId);
+  if(!d||!valor)return;
+  var saldo=docSaldo(d);
+  if(valor>saldo){toast('⚠ Valor maior que o saldo ('+fmt(saldo)+')','#f59e0b');return;}
+  if(!d.pgtos)d.pgtos=[];
+  d.pgtos.push({valor:valor,dt:hj(),forma:d.pag||'dinheiro'});
+  if(docSaldo(d)<=0)d.st='pago';
+  markDirty('pedidos');saveDB();
+  renderFichaCliente(cliId,'aberto');
+  toast('✓ Pagamento de '+fmt(valor)+' registrado','#10b981');
+}
+
 function renderFichaCliente(id,filtSt){
   if(!id)return;
   const c=DB.clientes.find(x=>x.id===id);if(!c)return;
@@ -3293,17 +3328,34 @@ function renderFichaCliente(id,filtSt){
       ${[['Total Compras',fmt(total),'#f97316'],['Lucro Gerado',fmt(lucro),'#10b981'],['A Receber',fmt(aRec),'#ef4444'],['Crédito Dev.',fmt(credAberto),'#f59e0b']].map(([l,v,cor])=>`<div style="background:var(--card2);border-radius:8px;padding:10px;text-align:center"><div style="font-family:'Barlow Condensed',sans-serif;font-size:19px;font-weight:800;color:${cor}">${v}</div><div style="font-size:11px;color:var(--mt)">${l}</div></div>`).join('')}
     </div>
     ${filHtml}
-    ${peds.length?`<div class="tw"><table><thead><tr><th>Nº</th><th>Data</th><th>Pgto</th><th>Total</th><th>Pago</th><th>Saldo</th><th>Status</th></tr></thead><tbody>${
-      peds.map(d=>`<tr style="cursor:pointer" onclick="verDoc('${d.id}',false,'${id}')" onmouseover="this.style.background='var(--card2)'" onmouseout="this.style.background=''" title="Clique para abrir o pedido">
-        <td style="color:${d.tipo==='orc'?'var(--yw)':'var(--or)'};font-weight:700">${d.num} 🔗</td>
-        <td>${d.dt}</td>
-        <td style="text-transform:capitalize;font-size:11.5px">${d.pag}</td>
-        <td>${fmt(d.total)}</td>
-        <td style="color:var(--gn)">${fmt(docPago(d))}</td>
-        <td style="color:${docSaldo(d)>0?'#ef4444':'var(--gn)'};font-weight:${docSaldo(d)>0?'700':'400'}">${docSaldo(d)>0?fmt(docSaldo(d)):'-'}</td>
-        <td>${tgSt(d.st)}</td>
-      </tr>`).join('')
-    }</tbody></table></div>`:`<div class="es">Nenhum pedido neste filtro</div>`}`;
+    ${peds.length?`<div class="tw"><table><thead><tr><th>Nº</th><th>Data</th><th>Dias</th><th>Pgto</th><th>Desc.</th><th>Total</th><th>Pago</th><th>Saldo</th><th>Ações</th></tr></thead><tbody>${
+      peds.map(d=>{
+        var saldo=docSaldo(d);
+        var diasDt=d.dtISO||d.dt||'';
+        if(diasDt.includes('/'))diasDt=diasDt.split('/').reverse().join('-');
+        var dias=diasDt?Math.floor((Date.now()-new Date(diasDt+'T00:00:00').getTime())/86400000):'';
+        var diasCor=dias>60?'#ef4444':dias>30?'#f59e0b':'var(--mt)';
+        var descPct=d.desc||0;
+        var temAberto=saldo>0&&filtro==='aberto';
+        return '<tr>'
+          +'<td style="color:'+(d.tipo==='orc'?'var(--yw)':'var(--or)')+';font-weight:700;cursor:pointer" onclick="verDoc(\''+d.id+'\',false,\''+id+'\')" title="Abrir pedido">'+d.num+' 🔗</td>'
+          +'<td>'+d.dt+'</td>'
+          +'<td style="font-size:11px;font-weight:700;color:'+diasCor+'">'+(dias!==''?dias+'d':'')+'</td>'
+          +'<td style="text-transform:capitalize;font-size:11.5px">'+d.pag+'</td>'
+          +'<td style="text-align:center">'+(temAberto
+            ?'<input id="fdesc-'+d.id+'" type="number" value="'+descPct+'" min="0" max="100" step="0.5" style="width:50px;padding:3px 4px;border:1px solid '+(descPct>0?'#f59e0b':'var(--br)')+';border-radius:5px;text-align:center;font-size:12px;font-weight:700;color:'+(descPct>0?'#f59e0b':'var(--mt)')+';background:var(--card2)" onchange="aplicarDescontoRapido(\''+d.id+'\',\''+id+'\')" title="Editar desconto">%'
+            :(descPct>0?'<span style="color:#f59e0b;font-weight:700">'+descPct+'%</span>':'-'))
+          +'</td>'
+          +'<td>'+fmt(d.total)+'</td>'
+          +'<td style="color:var(--gn)">'+fmt(docPago(d))+'</td>'
+          +'<td style="color:'+(saldo>0?'#ef4444':'var(--gn)')+';font-weight:'+(saldo>0?'700':'400')+'">'+fmt(saldo)+'</td>'
+          +'<td>'+(temAberto
+            ?'<div style="display:flex;gap:3px;align-items:center"><input id="fpgto-'+d.id+'" type="number" placeholder="R$" step="0.01" style="width:65px;padding:3px 4px;border:1px solid var(--br);border-radius:5px;font-size:12px;background:var(--card2)"><button onclick="pgtoRapidoFicha(\''+d.id+'\',\''+id+'\')" class="btn bp bsm" style="padding:3px 8px;font-size:11px" title="Registrar pagamento">💰</button></div>'
+            :tgSt(d.st))
+          +'</td>'
+          +'</tr>';
+      }).join('')
+    }</tbody>${filtro==='aberto'&&peds.length?'<tfoot><tr style="font-weight:800;background:var(--card2)"><td colspan="5" style="text-align:right;font-size:13px">TOTAL EM ABERTO:</td><td>'+fmt(peds.reduce(function(s,d){return s+d.total;},0))+'</td><td style="color:var(--gn)">'+fmt(peds.reduce(function(s,d){return s+docPago(d);},0))+'</td><td style="color:#ef4444">'+fmt(aRec)+'</td><td></td></tr></tfoot>':''}</table></div>`:`<div class="es">Nenhum pedido neste filtro</div>`}`;
 }
 
 function salvarCliente(){
