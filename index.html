@@ -1398,6 +1398,7 @@ select.inp option{background:var(--card2)}
       <div class="fgrp" style="margin-bottom:10px">
         <label class="fl">Forma de Pagamento</label>
         <select class="inp" id="cmd-pag" onchange="onPagComanda()" style="font-size:14px">
+          <option value="">Selecione...</option>
           <option value="dinheiro">Dinheiro</option>
           <option value="pix">Pix</option>
           <option value="cartão débito">Cartão Débito</option>
@@ -11424,9 +11425,8 @@ function renderComanda(){
   </tr>`).join('');
   document.getElementById('cmd-subtotal').innerHTML=`Subtotal: <strong>${fmt(sub)}</strong>${dv>0?` &nbsp;·&nbsp; Desconto: <strong style="color:#f59e0b">-${fmt(dv)}</strong>`:''} &nbsp;·&nbsp; <strong style="color:var(--or)">${fmt(tot)}</strong>`;
   calcComanda();
-}
-
-function calcComanda(){
+  atualizarPrazoComanda();
+}function calcComanda(){
   const sub=cmdItens.reduce((s,it)=>s+it.qtd*it.punit,0);
   const desc=parseFloat(document.getElementById('cmd-desc').value)||0;
   const dv=Math.round(sub*(desc/100)*100)/100;
@@ -11457,8 +11457,10 @@ function limparComanda(){
   cmdItens=[];cmdUltimoId=null;
   ['cmd-prd-src','cmd-obs','cmd-cli-src'].forEach(id=>{const e=document.getElementById(id);if(e)e.value='';});
   document.getElementById('cmd-cli-id').value='';
+  document.getElementById('cmd-pag').value='';
   document.getElementById('cmd-desc').value=0;
   document.getElementById('cmd-qtd').value=1;
+  atualizarPrazoComanda(); // esconde opção Prazo quando sem cliente
   const s=document.getElementById('cmd-sucesso');if(s)s.style.display='none';
   const b=document.getElementById('cmd-btn-imprimir');if(b)b.style.display='none';
   renderComanda();
@@ -11614,7 +11616,7 @@ function addItemComandaById(pid){
 function filtCliComanda(){
   const q=document.getElementById('cmd-cli-src').value.toLowerCase();
   const drop=document.getElementById('cmd-cli-drop');
-  if(!q){drop.style.display='none';document.getElementById('cmd-cli-id').value='';return;}
+  if(!q){drop.style.display='none';document.getElementById('cmd-cli-id').value='';atualizarPrazoComanda();return;}
   const res=DB.clientes.filter(c=>!c.anonimo&&(c.nome.toLowerCase().includes(q)||(c.tel||'').includes(q))).slice(0,10);
   if(!res.length){drop.style.display='none';return;}
   drop.style.display='block';
@@ -11627,10 +11629,25 @@ function filtCliComanda(){
       const c=DB.clientes.find(x=>x.id===el.dataset.id);
       if(c){document.getElementById('cmd-cli-src').value=c.nome;document.getElementById('cmd-cli-id').value=c.id;}
       drop.style.display='none';
+      atualizarPrazoComanda();
     });
     el.addEventListener('mouseenter',()=>el.style.background='var(--br2)');
     el.addEventListener('mouseleave',()=>el.style.background='');
   });
+}
+
+// Mostra/esconde opção "Prazo" conforme cliente selecionado
+function atualizarPrazoComanda(){
+  const sel=document.getElementById('cmd-pag');
+  const opt=sel.querySelector('option[value="prazo"]');
+  const cliId=document.getElementById('cmd-cli-id').value;
+  if(!opt)return;
+  if(!cliId||cliId==='cli-anonimo'){
+    opt.disabled=true;opt.style.display='none';
+    if(sel.value==='prazo')sel.value='';
+  } else {
+    opt.disabled=false;opt.style.display='';
+  }
 }
 
 function scanParaComanda(){
@@ -11650,12 +11667,13 @@ function scanParaComanda(){
 
 function finalizarComanda(){
   if(!cmdItens.length){toast('⚠ Adicione itens','#f59e0b');return;}
+  const forma=document.getElementById('cmd-pag').value;
+  if(!forma){toast('⚠ Selecione a forma de pagamento','#f59e0b');return;}
   const btn=document.getElementById('cmd-btn-finalizar');
   btn.disabled=true;btn.textContent='Salvando...';
 
   const cliId=document.getElementById('cmd-cli-id').value||'cli-anonimo';
   const cli=DB.clientes.find(c=>c.id===cliId)||DB.clientes.find(c=>c.id==='cli-anonimo');
-  const forma=document.getElementById('cmd-pag').value;
   const desc=parseFloat(document.getElementById('cmd-desc').value)||0;
   const obs=document.getElementById('cmd-obs').value.trim();
   const sub=cmdItens.reduce((s,it)=>s+it.qtd*it.punit,0);
@@ -12108,7 +12126,20 @@ window.auth.onAuthStateChanged(function(user){
     loginScreen.style.display = 'none';
     const uid = user.uid;
     const col = window.db.collection('lojas').doc(uid).collection('d');
-    // Carrega 4 documentos da nuvem
+    // PRIMEIRO: carrega dados do localStorage IMEDIATAMENTE (sem esperar Firebase)
+    var localLoaded=false;
+    try{
+      var localRaw=localStorage.getItem(KEY);
+      if(localRaw){
+        DB=JSON.parse(localRaw);
+        loadDB(); // normaliza estrutura
+        window._localPreloaded=true;
+        go('dashboard'); // renderiza imediatamente
+        localLoaded=true;
+        cmxLog('SYNC','Dados locais carregados instantaneamente',''+DB.pedidos.length+' pedidos');
+      }
+    }catch(e){}
+    // DEPOIS: sincroniza com Firebase em segundo plano
     col.get().then(function(snapshot){
       // Carrega TODOS os docs: meta dividido + produtos + pedidos mensais + legado
       var D={};
@@ -12228,7 +12259,8 @@ window.auth.onAuthStateChanged(function(user){
           salvarNaNuvem(Date.now());
         }
       }
-      initApp();
+      if(!localLoaded)initApp();
+      else{loadDB();go(curPg||'dashboard');cmxLog('SYNC','Firebase carregado — tela atualizada','');}
     }).catch(function(e){
       // Subcoleção não existe — tenta doc legado único
       console.warn('Subcoleção não encontrada, tentando legado:',e);
