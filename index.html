@@ -7407,7 +7407,7 @@ function confirmarImportXML(){
     valtotal:d.vNF,obs:'Importado via XML NF-e',pdfnome:'',itens:itensEnt};
   DB.entradas.push(ent);
   DB.seq.ent++;
-  saveDB();
+  markDirty('produtos');markDirty('op');saveDB();
   closeMD('xml');
   _xmlDados=null;
   xmlLimparRascunho();
@@ -10553,7 +10553,7 @@ function usarCredito(id){
         if(alvo.st==='mesclado-aberto')alvo.st='mesclado-pago';
         else alvo.st='pago';
       }
-      saveDB();renderPedidos();
+      markDirty('pedidos');saveDB();renderPedidos();
       toast(`✓ R$ ${aplicar.toFixed(2).replace('.',',')} de crédito aplicado em ${alvo.num}`);
     }
   } else {
@@ -12151,7 +12151,7 @@ function initApp(){
     try{localStorage.removeItem(k);}catch(e){}
   });
   loadDB();
-  migrarPedidosTrimestrais();
+  if(!window._localPreloaded)migrarPedidosTrimestrais(); // pula se local já carregou
   // seq é salvo no meta doc via saveDB() - não precisa de sync separado
   setCatFil('com'); // inicializa labels COM/SEM após scripts carregados
   go('dashboard');
