@@ -2502,17 +2502,18 @@ function salvarNaNuvem(ts){
     showSI('saved');
     cmxLog('FIREBASE','Salvo',''+writeCount+' doc(s), '+peds.length+' pedidos');
   }).catch(function(e){
-    var code=e.code||'';
-    var msg=(e.message||'').toLowerCase();
-    var isNetwork=(msg.includes('transport')||msg.includes('network')||code==='unavailable')&&code!=='resource-exhausted';
-    cmxLog(isNetwork?'WARN':'ERROR',isNetwork?'Falha de rede':'Erro Firebase',code+' '+String(e.message||'').slice(0,100));
+    // Extrai code de forma segura (Firebase errors são objetos complexos)
+    var code='';try{code=''+e.code;}catch(x){}
+    var isNetwork=code==='unavailable';
+    cmxLog(isNetwork?'WARN':'ERROR','Firebase batch falhou',code||'verifique conexão');
     _firebaseSavePending=false;
     _nuvemSaving=false;
     showSI('saved');
-    window._retryCount=(window._retryCount||0)+1;
-    if(isNetwork&&!_nuvemTimer&&window._retryCount<=2){
-      setTimeout(function(){saveDB();},10000);
-    } else {window._retryCount=0;}
+    if(isNetwork&&!_nuvemTimer){
+      window._retryCount=(window._retryCount||0)+1;
+      if(window._retryCount<=2)setTimeout(function(){saveDB();},10000);
+      else window._retryCount=0;
+    }
   });
 }
 
