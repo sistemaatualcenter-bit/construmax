@@ -5944,9 +5944,15 @@ function _abrirFornecedor(id){
 function relatorioFornecedor(forId){
   var f=DB.fornecedores.find(x=>x.id===forId);
   if(!f){toast('⚠ Fornecedor não encontrado','#f59e0b');return;}
+  var cfg=DB.config||{};
+  var cor=cfg.corImpressao||'#e65c00';
+  var logo=cfg.logo||'';
+  var logoHtml=logo
+    ?'<img src="'+logo+'" style="max-height:44px;max-width:150px;object-fit:contain" alt="logo">'
+    :'<div style="font-size:15px;font-weight:900;color:'+cor+'">'+(cfg.nome||'CONSTRUMAX')+'</div>';
   // Coleta todos os itens comprados deste fornecedor
   var itensMap={};
-  DB.entradas.filter(e=>e.forid===forId).forEach(function(ent){
+  DB.entradas.filter(function(ent){return ent.forid===forId;}).forEach(function(ent){
     (ent.itens||[]).forEach(function(it){
       var key=it.pid||it.nome||'?';
       if(!itensMap[key]){
@@ -5962,72 +5968,88 @@ function relatorioFornecedor(forId){
       }
     });
   });
-  var lista=Object.values(itensMap).sort(function(a,b){return b.qtdTotal-a.qtdTotal;});
+  var lista=Object.values(itensMap).sort(function(a,b){return a.nome.localeCompare(b.nome,'pt-BR');});
   // Enriquece com dados atuais do produto
   lista.forEach(function(it){
-    var prod=it.pid?DB.produtos.find(p=>p.id===it.pid):null;
+    var prod=it.pid?DB.produtos.find(function(p){return p.id===it.pid;}):null;
     if(prod){
-      it.nomeAtual=prod.nome;
-      it.precoVenda=prod.prvenda||0;
-      it.custoAtual=prod.custo||0;
-      it.estoque=prod.est||0;
-      it.un=prod.un||'un';
-      it.cat=prod.cat||'';
-      it.margem=it.precoVenda&&it.custoAtual?Math.round((it.precoVenda-it.custoAtual)/it.precoVenda*100):0;
+      it.nomeAtual=prod.nome;it.precoVenda=prod.prvenda||prod.preco||0;
+      it.custoAtual=prod.custo||0;it.estoque=prod.est||0;it.un=prod.un||'un';it.cat=prod.cat||'';
+      it.barras=prod.barras||'';
     } else {
-      it.nomeAtual=it.nome;it.precoVenda=0;it.custoAtual=0;it.estoque=0;it.un='';it.cat='';it.margem=0;
+      it.nomeAtual=it.nome;it.precoVenda=0;it.custoAtual=0;it.estoque=0;it.un='';it.cat='';it.barras='';
     }
   });
+  if(!lista.length){toast('⚠ Nenhuma compra registrada deste fornecedor','#f59e0b');return;}
   var totalItens=lista.length;
-  var totalQtd=lista.reduce(function(s,it){return s+it.qtdTotal;},0);
-  var totalValor=lista.reduce(function(s,it){return s+it.qtdTotal*it.ultimoCusto;},0);
-  // Renderiza no modal
-  var html='<div style="padding:16px">'
-    +'<div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">'
-    +'<div style="width:42px;height:42px;border-radius:10px;background:linear-gradient(135deg,#3b82f6,#1d4ed8);color:#fff;display:flex;align-items:center;justify-content:center;font-size:18px;font-weight:800">'+f.nome.charAt(0)+'</div>'
-    +'<div><div style="font-weight:800;font-size:15px">'+f.nome+'</div>'
-    +'<div style="font-size:11px;color:var(--mt)">'+(f.cnpj||'')+' '+(f.tel||'')+'</div></div></div>'
-    +'<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px">'
-    +'<div style="background:var(--card2);border-radius:8px;padding:10px;text-align:center"><div style="font-size:18px;font-weight:800;color:#3b82f6">'+totalItens+'</div><div style="font-size:11px;color:var(--mt)">Produtos</div></div>'
-    +'<div style="background:var(--card2);border-radius:8px;padding:10px;text-align:center"><div style="font-size:18px;font-weight:800;color:#f97316">'+totalQtd+'</div><div style="font-size:11px;color:var(--mt)">Qtd Total</div></div>'
-    +'<div style="background:var(--card2);border-radius:8px;padding:10px;text-align:center"><div style="font-size:18px;font-weight:800;color:#10b981">'+fmt(totalValor)+'</div><div style="font-size:11px;color:var(--mt)">Total Comprado</div></div>'
-    +'</div>';
-  if(lista.length){
-    html+='<div class="tw"><table><thead><tr>'
-      +'<th>Produto</th><th>Cat.</th><th>Últ. Custo</th><th>Preço Venda</th><th>Margem</th><th>Estoque</th><th>Qtd Comprada</th><th>Últ. Compra</th>'
-      +'</tr></thead><tbody>';
-    lista.forEach(function(it){
-      var dtFmt=it.ultimaDt;
-      if(dtFmt.includes('-')&&dtFmt.length>=10)dtFmt=dtFmt.slice(0,10).split('-').reverse().join('/');
-      var estoqueAlerta=it.estoque<=0;
-      html+='<tr>'
-        +'<td style="font-weight:600;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+it.nomeAtual+'">'+it.nomeAtual+'</td>'
-        +'<td style="font-size:11px;color:var(--mt)">'+it.cat+'</td>'
-        +'<td style="color:#f59e0b;font-weight:700">'+fmt(it.ultimoCusto)+'</td>'
-        +'<td style="color:var(--gn)">'+fmt(it.precoVenda)+'</td>'
-        +'<td style="font-weight:700;color:'+(it.margem>=30?'#10b981':it.margem>=15?'#f59e0b':'#ef4444')+'">'+it.margem+'%</td>'
-        +'<td style="font-weight:700;color:'+(estoqueAlerta?'#ef4444':'var(--tx)')+'">'+it.estoque+' '+it.un+'</td>'
-        +'<td style="text-align:center;font-weight:600">'+it.qtdTotal+'</td>'
-        +'<td style="font-size:12px;color:var(--mt)">'+dtFmt+'</td>'
-        +'</tr>';
+  var totalComprado=lista.reduce(function(s,it){return s+it.qtdTotal*it.ultimoCusto;},0);
+  // Gera PDF via window.open + print
+  var w=window.open('','_blank');
+  var html='<html><head><meta charset="UTF-8"><title>Relatório '+f.nome+'</title>';
+  html+='<style>'
+    +'*{box-sizing:border-box;margin:0;padding:0}'
+    +'body{font-family:Arial,sans-serif;padding:14px 18px;font-size:10px;color:#111}'
+    +'@media print{body{padding:8px 12px}}'
+    +'.header{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid '+cor+';padding-bottom:10px;margin-bottom:12px}'
+    +'.sub{font-size:8.5px;color:#555;margin-top:3px}'
+    +'table{width:100%;border-collapse:collapse;margin-top:8px;border:1.5px solid #aaa}'
+    +'th{background:'+cor+';color:#fff;padding:6px 8px;text-align:left;font-size:9px;font-weight:700;border:1px solid '+cor+'}'
+    +'td{padding:6px 8px;font-size:9.5px;border:1px solid #ccc;vertical-align:middle}'
+    +'tr:nth-child(even) td{background:#f5f5f5}'
+    +'tr:nth-child(odd) td{background:#fff}'
+    +'.preco{font-weight:700;color:'+cor+'}'
+    +'.zerado{color:#c00;font-weight:700}'
+    +'.total{text-align:right;font-weight:700;font-size:11px;margin-top:10px;border-top:2px solid '+cor+';padding-top:6px}'
+    +'.footer{margin-top:14px;text-align:center;font-size:8px;color:#555;border-top:1px solid #ccc;padding-top:6px}'
+    +'</style></head><body>';
+  // Cabeçalho
+  html+='<div class="header">'
+    +'<div>'+logoHtml+'<div class="sub">'+(cfg.end||'')+' '+(cfg.tel?'· '+cfg.tel:'')+' '+(cfg.cnpj?'· CNPJ: '+cfg.cnpj:'')+'</div></div>'
+    +'<div style="text-align:right">'
+    +'<div style="font-size:13px;font-weight:900;color:'+cor+'">RELATÓRIO DE COMPRAS</div>'
+    +'<div style="font-size:10px;font-weight:700;color:#333">'+f.nome+'</div>'
+    +'<div style="font-size:9px;color:#555">'+(f.cnpj||'')+' '+(f.tel?'· '+f.tel:'')+'</div>'
+    +'<div style="font-size:9px;color:#555">Emitido em: '+hj()+'</div>'
+    +'</div></div>';
+  // Tabela
+  html+='<table><thead><tr>'
+    +'<th style="width:30%">Produto</th>'
+    +'<th style="width:12%">Categoria</th>'
+    +'<th style="width:12%;text-align:right">Últ. Custo</th>'
+    +'<th style="width:12%;text-align:right">Preço Venda</th>'
+    +'<th style="width:10%;text-align:center">Estoque</th>'
+    +'<th style="width:12%;text-align:center">Qtd Comprada</th>'
+    +'<th style="width:12%;text-align:center">Últ. Compra</th>'
+    +'</tr></thead><tbody>';
+  lista.forEach(function(it){
+    var dtFmt=it.ultimaDt;
+    if(dtFmt.includes('-')&&dtFmt.length>=10)dtFmt=dtFmt.slice(0,10).split('-').reverse().join('/');
+    html+='<tr>'
+      +'<td style="font-weight:600">'+it.nomeAtual+'</td>'
+      +'<td style="color:#555">'+it.cat+'</td>'
+      +'<td style="text-align:right" class="preco">'+fmt(it.ultimoCusto)+'</td>'
+      +'<td style="text-align:right;font-weight:600;color:#059669">'+fmt(it.precoVenda)+'</td>'
+      +'<td style="text-align:center'+(it.estoque<=0?'" class="zerado':'')+'">'+(it.estoque<=0?'ZERADO':it.estoque+' '+it.un)+'</td>'
+      +'<td style="text-align:center;font-weight:700">'+it.qtdTotal+'</td>'
+      +'<td style="text-align:center;color:#555">'+dtFmt+'</td>'
+      +'</tr>';
+  });
+  html+='</tbody></table>';
+  html+='<div class="total">'+totalItens+' produtos &nbsp;·&nbsp; Total comprado: '+fmt(totalComprado)+'</div>';
+  html+='<div class="footer">'+(cfg.rodape||'Documento gerado automaticamente')+'</div>';
+  html+='</body></html>';
+  w.document.write(html);
+  w.document.close();
+  if(w.document.images.length){
+    var imgs=Array.from(w.document.images);var loaded=0;
+    imgs.forEach(function(img){
+      if(img.complete){loaded++;if(loaded===imgs.length)w.print();}
+      else{img.onload=img.onerror=function(){loaded++;if(loaded===imgs.length)w.print();};}
     });
-    html+='</tbody></table></div>';
-  } else {
-    html+='<div class="es">Nenhuma compra registrada para este fornecedor</div>';
-  }
-  html+='</div>';
-  // Abre modal genérico
-  var modal=document.getElementById('md-rel-for');
-  if(!modal){
-    modal=document.createElement('div');
-    modal.id='md-rel-for';modal.className='md';
-    modal.style.cssText='display:none;max-width:850px';
-    modal.innerHTML='<div class="mh"><div class="mt2x">📋 Relatório de Compras</div><button class="btn bg bsm" onclick="closeMD('+"'"+'rel-for'+"'"+')">✕</button></div><div id="md-rel-for-body"></div>';
-    document.body.appendChild(modal);
-  }
-  document.getElementById('md-rel-for-body').innerHTML=html;
-  openMD('rel-for');
+    if(loaded===imgs.length)w.print();
+  } else {w.print();}
 }
+
 
 function salvarFornecedor(){
   const nome=document.getElementById('mf-nome').value.trim();
