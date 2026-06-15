@@ -2288,9 +2288,8 @@ function cmxLog(nivel,msg,detalhe){
   };
   _cmxLogs.unshift(entry);
   if(_cmxLogs.length>_cmxMaxLogs)_cmxLogs.pop();
-  // Espelha no console com formatação
-  const con=nivel==='ERROR'?console.error:nivel==='WARN'?console.warn:console.log;
-  con('[CMX '+nivel+'] '+msg+(detalhe?' | '+String(detalhe).slice(0,100):''));
+  // Sempre usa console.log (console.error causa "Too many properties" no Chrome com objetos Firebase)
+  console.log('[CMX '+nivel+'] '+msg+(detalhe?' | '+String(detalhe).slice(0,100):''));
 }
 function renderLogViewer(){
   const el=document.getElementById('cmx-log-viewer');
