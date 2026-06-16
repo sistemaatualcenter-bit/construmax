@@ -2326,8 +2326,6 @@ function markDirty(colecao){
 
 function saveDB(){
   const ts = Date.now();
-  _firebaseSavePending=true;
-  showSI('pending');
   // Se não houver markDirty específico, marca all=true (escreve tudo — seguro)
   if(!window._cmxDirty||Object.keys(window._cmxDirty).length===0){
     window._cmxDirty={all:true};
@@ -2349,13 +2347,11 @@ function saveDB(){
         });
         localStorage.setItem(KEY, JSON.stringify(dbReduzido));
         localStorage.setItem(KEY+'_ts', String(ts));
-        cmxLog('WARN','localStorage cheio — versão reduzida salva','');
-      }catch(e2){
-        cmxLog('ERROR','Falha ao salvar local','Firebase é o backup principal');
-      }
+      }catch(e2){}
     }
   },0);
-  // Debounce Firebase
+  // Debounce Firebase (NÃO mostra "Salvando" aqui — é mostrado só quando o batch envia)
+  _firebaseSavePending=true;
   if(_nuvemTimer) clearTimeout(_nuvemTimer);
   _nuvemTimer=setTimeout(function(){
     _nuvemTimer=null;
@@ -2363,11 +2359,11 @@ function saveDB(){
       _nuvemTimer=setTimeout(function(){
         _nuvemTimer=null;
         salvarNaNuvem(parseInt(localStorage.getItem(KEY+'_ts')||Date.now()));
-      },15000);
+      },8000);
       return;
     }
     salvarNaNuvem(ts);
-  },15000);
+  },8000);
 }
 
 // ── Helper: retorna chave do documento por MÊS (evita limite 1MB do Firestore) ──
@@ -2485,6 +2481,7 @@ function salvarNaNuvem(ts){
     return;
   }
   cmxLog('FIREBASE','Enviando batch',''+writeCount+' doc(s)');
+  showSI('pending');
   batch.commit().then(function(){
     window._cmxDirty={};
     window._retryCount=0;
@@ -2502,10 +2499,12 @@ function salvarNaNuvem(ts){
     showSI('saved');
     cmxLog('FIREBASE','Salvo',''+writeCount+' doc(s), '+peds.length+' pedidos');
   }).catch(function(e){
-    // Extrai code de forma segura (Firebase errors são objetos complexos)
-    var code='';try{code=''+e.code;}catch(x){}
+    var code='';
+    try{code=''+e.code;}catch(x){}
+    if(!code)try{code=e.name||'';}catch(x){}
+    if(!code)try{code=typeof e;}catch(x){}
     var isNetwork=code==='unavailable';
-    cmxLog(isNetwork?'WARN':'ERROR','Firebase batch falhou',code||'verifique conexão');
+    cmxLog(isNetwork?'WARN':'ERROR','Firebase batch falhou',code||'erro-desconhecido');
     _firebaseSavePending=false;
     _nuvemSaving=false;
     showSI('saved');
@@ -12400,13 +12399,20 @@ window.auth.onAuthStateChanged(function(user){
         (DB.pedidos||[]).forEach(function(p){if(p.id)idsLocais[p.id]=true;});
         fbPeds.forEach(function(p){if(p.id&&!idsLocais[p.id]){DB.pedidos.push(p);idsLocais[p.id]=true;}});
         cmxLog('SYNC','Local mais recente — mesclado com Firebase antes de upload','local+fb='+DB.pedidos.length);
-        // migrarPedidosTrimestrais (após initApp) vai recuperar os docs mensais também
-        // Aguarda 2s para a migração rodar antes de subir tudo
-        setTimeout(function(){
-          window._cmxDirty={all:true,clientes:true,fin:true,op:true,produtos:true,pedidosMeses:getPedidosDocKeys()};
-          window._lastHashes={};
-          salvarNaNuvem(Date.now());
-        },2500);
+        // Não faz upload imediato — deixa o próximo saveDB normal subir os dados
+        // Isso evita batch gigante no login que causa erro
+        // Inicializa hashes para que o próximo save escreva só o que mudou
+        try{
+          window._lastHashes=window._lastHashes||{};
+          window._lastHashes.clientes=quickHash(JSON.stringify(DB.clientes||[]));
+          window._lastHashes.fin=quickHash(JSON.stringify(DB.boletos||[])+JSON.stringify(DB.despesas||[]));
+          window._lastHashes.op=quickHash(JSON.stringify(DB.fornecedores||[])+JSON.stringify(DB.entradas||[]).slice(0,200));
+          var _pc2=DB.produtos||[];
+          for(var _j=0;_j<Math.ceil(_pc2.length/2000)||1;_j++){
+            window._lastHashes['prod_'+_j]=quickHash(JSON.stringify(_pc2.slice(_j*2000,(_j+1)*2000)));
+          }
+        }catch(e){}
+        cmxLog('SYNC','Local mais recente — hashes sincronizados','');
       } else {
         // Nuvem vazia — sobe o local para a nuvem
         const local=localStorage.getItem(KEY);
