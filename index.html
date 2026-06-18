@@ -2396,6 +2396,8 @@ function quickHash(str){
 
 function salvarNaNuvem(ts){
   if(!window.db || !window.currentUser) return;
+  // Disjuntor: se Firebase pausado por falhas, não tenta
+  if(window._fbCircuitOpen){_firebaseSavePending=false;_nuvemSaving=false;return;}
   if(_nuvemSaving){console.log('[FIREBASE] write em andamento, aguardando...');return;}
   _nuvemSaving=true;
   const uid = window.currentUser.uid;
@@ -2490,6 +2492,8 @@ function salvarNaNuvem(ts){
   showSI('pending');
   batch.commit().then(function(){
     window._cmxDirty={};
+    window._fbFailCount=0; // reseta contador de falhas
+    window._fbCircuitOpen=false; // reabre disjuntor
     window._retryCount=0;
     // Atualiza hashes
     window._lastHashes.clientes=quickHash(metaClientes.clientes);
@@ -2508,19 +2512,22 @@ function salvarNaNuvem(ts){
     var info='';
     try{
       if(e&&e.code) info=e.code;
-      else if(e&&e.name) info=e.name+': '+(e.message||'').slice(0,60);
-      else if(e) info=String(e).slice(0,80);
-      else info='erro-nulo';
-    }catch(x){info='erro-ao-ler-erro';}
-    var isNetwork=info.indexOf('unavailable')>=0;
-    cmxLog(isNetwork?'WARN':'ERROR','Firebase batch falhou',info);
+      else if(e&&e.name) info=e.name;
+      else info='erro';
+    }catch(x){info='erro';}
+    window._fbFailCount=(window._fbFailCount||0)+1;
     _firebaseSavePending=false;
     _nuvemSaving=false;
     showSI('saved');
-    if(isNetwork&&!_nuvemTimer){
-      window._retryCount=(window._retryCount||0)+1;
-      if(window._retryCount<=2)setTimeout(function(){saveDB();},10000);
-      else window._retryCount=0;
+    // Disjuntor: após 3 falhas seguidas, para de tentar (dados seguros no localStorage)
+    if(window._fbFailCount>=3){
+      if(!window._fbCircuitOpen){
+        window._fbCircuitOpen=true;
+        cmxLog('WARN','Firebase pausado após falhas — dados seguros no localStorage',info);
+        toast('⚠ Nuvem temporariamente indisponível. Dados salvos localmente.','#f59e0b');
+      }
+    } else {
+      cmxLog('WARN','Firebase falhou ('+window._fbFailCount+'/3)',info);
     }
   });
 }
@@ -12245,6 +12252,16 @@ function iniciarAutoBackup(){
       ev.preventDefault();
       ev.returnValue='Ainda salvando dados. Aguarde um momento antes de fechar.';
       return ev.returnValue;
+    }
+  });
+
+  // Quando usuário volta à aba, reseta disjuntor e tenta salvar novamente
+  document.addEventListener('visibilitychange',function(){
+    if(document.visibilityState==='visible'&&window._fbCircuitOpen){
+      window._fbCircuitOpen=false;
+      window._fbFailCount=0;
+      cmxLog('INFO','Firebase reativado ao voltar à aba','');
+      if(_firebaseSavePending)saveDB();
     }
   });
 }
