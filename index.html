@@ -1443,6 +1443,7 @@ select.inp option{background:var(--card2)}
       <div class="stl">💾 Exportar Backup</div>
       <div style="display:flex;flex-direction:column;gap:8px">
         <button class="btn bs" onclick="exportBK('Completo')">⬇ Backup Completo</button>
+        <button class="btn bs" onclick="forcarUpload()" style="color:#3b82f6;border-color:#3b82f6">☁️ Forçar Upload Nuvem</button>
         <button class="btn bg" onclick="exportBK('Clientes')">Só Clientes</button>
         <button class="btn bg" onclick="exportBK('Produtos')">Só Produtos</button>
         <button class="btn bg" onclick="exportBK('Pedidos')">Só Pedidos</button>
@@ -2324,15 +2325,19 @@ function markDirty(colecao){
   }
 }
 
+var _localTimer=null; // debounce do localStorage
+
 function saveDB(){
-  const ts = Date.now();
-  _saveCounter++; // marca que houve alteração (para backup automático)
-  // Se não houver markDirty específico, marca all=true (escreve tudo — seguro)
+  var ts = Date.now();
+  _saveCounter++;
   if(!window._cmxDirty||Object.keys(window._cmxDirty).length===0){
     window._cmxDirty={all:true};
   }
-  // localStorage em background (não trava a UI)
-  setTimeout(function(){
+  // localStorage com debounce 500ms (agrupa ações rápidas em 1 stringify)
+  _firebaseSavePending=true;
+  if(_localTimer) clearTimeout(_localTimer);
+  _localTimer=setTimeout(function(){
+    _localTimer=null;
     try{
       localStorage.setItem(KEY, JSON.stringify(DB));
       localStorage.setItem(KEY+'_ts', String(ts));
@@ -2350,9 +2355,8 @@ function saveDB(){
         localStorage.setItem(KEY+'_ts', String(ts));
       }catch(e2){}
     }
-  },0);
-  // Debounce Firebase (NÃO mostra "Salvando" aqui — é mostrado só quando o batch envia)
-  _firebaseSavePending=true;
+  },500);
+  // Debounce Firebase 8s
   if(_nuvemTimer) clearTimeout(_nuvemTimer);
   _nuvemTimer=setTimeout(function(){
     _nuvemTimer=null;
@@ -2396,72 +2400,49 @@ function quickHash(str){
 
 function salvarNaNuvem(ts){
   if(!window.db || !window.currentUser) return;
-  // Disjuntor: se Firebase pausado por falhas, não tenta
   if(window._fbCircuitOpen){_firebaseSavePending=false;_nuvemSaving=false;return;}
-  if(_nuvemSaving){console.log('[FIREBASE] write em andamento, aguardando...');return;}
+  // Timeout segurança: se _nuvemSaving travou por 30s+, reseta
+  if(_nuvemSaving){
+    if(!window._nuvemSavingTs) window._nuvemSavingTs=Date.now();
+    if(Date.now()-window._nuvemSavingTs>30000){
+      _nuvemSaving=false;
+      cmxLog('WARN','_nuvemSaving resetado por timeout (30s)','');
+    } else {return;}
+  }
   _nuvemSaving=true;
-  const uid = window.currentUser.uid;
-  const timestamp = ts || parseInt(localStorage.getItem(KEY+'_ts')||'0') || Date.now();
-  const col = window.db.collection('lojas').doc(uid).collection('d');
-  const peds = DB.pedidos||[];
-  // Agrupa pedidos por mês
-  const pedsByQ={};
-  peds.forEach(function(p){
-    const k=getPedidosDocKey(p);
-    if(!pedsByQ[k])pedsByQ[k]=[];
-    pedsByQ[k].push(p);
-  });
-  const qKeys=Object.keys(pedsByQ);
-  // Prepara documentos meta
-  const meta = {
-    ts: timestamp,
-    config:JSON.stringify(DB.config||{}),
-    seq:JSON.stringify(DB.seq||{}),
-    categorias:JSON.stringify(DB.categorias||[]),
-    familias:JSON.stringify(DB.familias||[]),
-    campanhas:JSON.stringify(DB.campanhas||[]),
-  };
-  const metaClientes = {
-    clientes: JSON.stringify(DB.clientes||[]),
-    ts: timestamp,
-  };
-  const metaFin = {
-    boletos:  JSON.stringify(DB.boletos||[]),
-    despesas: JSON.stringify(DB.despesas||[]),
-    ts: timestamp,
-  };
-  const metaOp = {
-    fornecedores:JSON.stringify(DB.fornecedores||[]),
-    entradas:    JSON.stringify(DB.entradas||[]),
-    devolucoes:  JSON.stringify(DB.devolucoes||[]),
-    parceiros:   JSON.stringify(DB.parceiros||[]),
-    tarefas:     JSON.stringify(DB.tarefas||[]),
-    xmlMemoria:  JSON.stringify(DB.xmlMemoria||'{}'),
-    ts: timestamp,
-  };
-  const dirty=window._cmxDirty||{};
+  window._nuvemSavingTs=Date.now();
+  var uid = window.currentUser.uid;
+  var timestamp = ts || parseInt(localStorage.getItem(KEY+'_ts')||'0') || Date.now();
+  var col = window.db.collection('lojas').doc(uid).collection('d');
+  var peds = DB.pedidos||[];
+  var pedsByQ={};
+  peds.forEach(function(p){var k=getPedidosDocKey(p);if(!pedsByQ[k])pedsByQ[k]=[];pedsByQ[k].push(p);});
+  var meta={ts:timestamp,config:JSON.stringify(DB.config||{}),seq:JSON.stringify(DB.seq||{}),categorias:JSON.stringify(DB.categorias||[]),familias:JSON.stringify(DB.familias||[]),campanhas:JSON.stringify(DB.campanhas||[])};
+  var metaClientes={clientes:JSON.stringify(DB.clientes||[]),ts:timestamp};
+  var metaFin={boletos:JSON.stringify(DB.boletos||[]),despesas:JSON.stringify(DB.despesas||[]),ts:timestamp};
+  var metaOp={fornecedores:JSON.stringify(DB.fornecedores||[]),entradas:JSON.stringify(DB.entradas||[]),devolucoes:JSON.stringify(DB.devolucoes||[]),parceiros:JSON.stringify(DB.parceiros||[]),tarefas:JSON.stringify(DB.tarefas||[]),xmlMemoria:JSON.stringify(DB.xmlMemoria||'{}'),ts:timestamp};
+  var dirty=window._cmxDirty||{};
   window._lastHashes=window._lastHashes||{};
-  // Monta UM batch com APENAS os docs que realmente mudaram
-  var batch=window.db.batch();
-  var writeCount=0;
-  // meta: sempre (contém ts)
-  batch.set(col.doc('meta'),meta);writeCount++;
-  // clientes
+  // Monta lista de writes (doc_ref, data) — só o que mudou
+  var writes=[];
+  // meta: sempre (sem merge — campos simples)
+  writes.push({ref:col.doc('meta'),data:meta,name:'meta'});
+  // clientes (com merge por ID)
   if(dirty.all||dirty.clientes){
     var h=quickHash(metaClientes.clientes);
-    if(h!==window._lastHashes.clientes){batch.set(col.doc('meta_clientes'),metaClientes);writeCount++;}
+    if(h!==window._lastHashes.clientes) writes.push({ref:col.doc('meta_clientes'),data:metaClientes,name:'meta_clientes',hash:'clientes',hashVal:h,mergeFields:['clientes']});
   }
-  // financeiro
+  // financeiro (com merge por ID)
   if(dirty.all||dirty.fin){
     var h=quickHash(metaFin.boletos+metaFin.despesas);
-    if(h!==window._lastHashes.fin){batch.set(col.doc('meta_fin'),metaFin);writeCount++;}
+    if(h!==window._lastHashes.fin) writes.push({ref:col.doc('meta_fin'),data:metaFin,name:'meta_fin',hash:'fin',hashVal:h,mergeFields:['boletos','despesas']});
   }
-  // operacional
+  // operacional (com merge por ID)
   if(dirty.all||dirty.op){
     var h=quickHash(metaOp.fornecedores+metaOp.entradas.slice(0,200));
-    if(h!==window._lastHashes.op){batch.set(col.doc('meta_op'),metaOp);writeCount++;}
+    if(h!==window._lastHashes.op) writes.push({ref:col.doc('meta_op'),data:metaOp,name:'meta_op',hash:'op',hashVal:h,mergeFields:['fornecedores','entradas','devolucoes','parceiros']});
   }
-  // produtos (chunks de 2000)
+  // produtos (com merge por ID)
   if(dirty.all||dirty.produtos){
     var allProds=DB.produtos||[];
     for(var i=0;i<allProds.length;i+=2000){
@@ -2469,67 +2450,109 @@ function salvarNaNuvem(ts){
       var idx=i/2000;
       var key=idx===0?'produtos':'produtos_'+idx;
       var h=quickHash(JSON.stringify(chunk));
-      if(h!==(window._lastHashes['prod_'+idx]||'')){batch.set(col.doc(key),{ts:timestamp,produtos:JSON.stringify(chunk)});writeCount++;}
+      if(h!==(window._lastHashes['prod_'+idx]||'')) writes.push({ref:col.doc(key),data:{ts:timestamp,produtos:JSON.stringify(chunk)},name:key,hash:'prod_'+idx,hashVal:h,mergeFields:['produtos']});
     }
   }
-  // pedidos (só meses que mudaram)
-  // Pedidos: só escreve meses explicitamente marcados (NUNCA todos de uma vez)
+  // pedidos (com merge por ID)
   var dirtyMonths=dirty.pedidosMeses||[];
   dirtyMonths.forEach(function(k){
-    if(pedsByQ[k]){batch.set(col.doc(k),{ts:timestamp,pedidos:JSON.stringify(pedsByQ[k])});writeCount++;}
+    if(pedsByQ[k]) writes.push({ref:col.doc(k),data:{ts:timestamp,pedidos:JSON.stringify(pedsByQ[k])},name:k,mergeFields:['pedidos']});
   });
-  // Se só tem meta (nada mudou de verdade), cancela
-  if(writeCount<=1){
-    _nuvemSaving=false;_firebaseSavePending=false;showSI('saved');
-    return;
+  // Se só meta (nada mudou), cancela
+  if(writes.length<=1){
+    _nuvemSaving=false;_firebaseSavePending=false;showSI('saved');return;
   }
-  // Validação antes de enviar
-  if(!window.db||!window.currentUser){
-    cmxLog('ERROR','Firebase não conectado — batch cancelado','');
-    _nuvemSaving=false;_firebaseSavePending=false;return;
-  }
-  cmxLog('FIREBASE','Enviando batch',''+writeCount+' doc(s)');
+  // Escreve um por um em sequência (sem batch — evita fila corrompida do SDK)
   showSI('pending');
-  batch.commit().then(function(){
-    window._cmxDirty={};
-    window._fbFailCount=0; // reseta contador de falhas
-    window._fbCircuitOpen=false; // reabre disjuntor
-    window._retryCount=0;
-    // Atualiza hashes
-    window._lastHashes.clientes=quickHash(metaClientes.clientes);
-    window._lastHashes.fin=quickHash(metaFin.boletos+metaFin.despesas);
-    window._lastHashes.op=quickHash(metaOp.fornecedores+metaOp.entradas.slice(0,200));
-    var _pc=DB.produtos||[];
-    for(var _i=0;_i<Math.ceil(_pc.length/2000)||1;_i++){
-      window._lastHashes['prod_'+_i]=quickHash(JSON.stringify(_pc.slice(_i*2000,(_i+1)*2000)));
-    }
-    _ultimoTsNuvem=timestamp;
-    _firebaseSavePending=false;
-    _nuvemSaving=false;
-    showSI('saved');
-    cmxLog('FIREBASE','Salvo',''+writeCount+' doc(s), '+peds.length+' pedidos');
-  }).catch(function(e){
-    var info='';
-    try{
-      if(e&&e.code) info=e.code;
-      else if(e&&e.name) info=e.name;
-      else info='erro';
-    }catch(x){info='erro';}
+  // Merge bidirecional: lê Firebase antes de escrever, une registros por ID
+  function mergeArrayField(fbStr, localStr){
+    var fbArr=[],localArr=[];
+    try{fbArr=JSON.parse(fbStr||'[]');}catch(e){}
+    try{localArr=JSON.parse(localStr||'[]');}catch(e){}
+    // Local vence (mudanças do usuário), mas adiciona registros do Firebase que não existem local
+    var map={};
+    fbArr.forEach(function(r){if(r&&r.id)map[r.id]=r;});
+    localArr.forEach(function(r){if(r&&r.id)map[r.id]=r;}); // local sobrescreve
+    return JSON.stringify(Object.values(map));
+  }
+  var i=0;
+  function onWriteError(e,wName){
+    var info='';try{info=''+(e.code||e.name||'erro');}catch(x){info='erro';}
+    cmxLog('WARN','Firebase write falhou: '+wName,info);
+    _firebaseSavePending=false;_nuvemSaving=false;showSI('saved');
     window._fbFailCount=(window._fbFailCount||0)+1;
-    _firebaseSavePending=false;
-    _nuvemSaving=false;
-    showSI('saved');
-    // Disjuntor: após 3 falhas seguidas, para de tentar (dados seguros no localStorage)
-    if(window._fbFailCount>=3){
-      if(!window._fbCircuitOpen){
-        window._fbCircuitOpen=true;
-        cmxLog('WARN','Firebase pausado após falhas — dados seguros no localStorage',info);
-        toast('⚠ Nuvem temporariamente indisponível. Dados salvos localmente.','#f59e0b');
-      }
-    } else {
-      cmxLog('WARN','Firebase falhou ('+window._fbFailCount+'/3)',info);
+    if(window._fbFailCount>=3&&!window._fbCircuitOpen){
+      window._fbCircuitOpen=true;
+      cmxLog('WARN','Firebase pausado — dados seguros local','');
     }
-  });
+  }
+  function next(){
+    if(i>=writes.length){
+      window._cmxDirty={};
+      window._fbFailCount=0;window._fbCircuitOpen=false;
+      // Atualiza DB em memória com dados mesclados (que foram efetivamente escritos)
+      writes.forEach(function(w){
+        if(w.mergeFields){
+          w.mergeFields.forEach(function(field){
+            if(w.data[field]){
+              try{
+                var merged=JSON.parse(w.data[field]);
+                // Atualiza a coleção correspondente no DB
+                if(field==='clientes')DB.clientes=merged;
+                else if(field==='produtos')DB.produtos=merged;
+                else if(field==='boletos')DB.boletos=merged;
+                else if(field==='despesas')DB.despesas=merged;
+                else if(field==='fornecedores')DB.fornecedores=merged;
+                else if(field==='entradas')DB.entradas=merged;
+                else if(field==='devolucoes')DB.devolucoes=merged;
+                else if(field==='parceiros')DB.parceiros=merged;
+                else if(field==='pedidos'){
+                  // Pedidos mensais: mescla no array global por ID
+                  var map={};
+                  DB.pedidos.forEach(function(p){if(p.id)map[p.id]=p;});
+                  merged.forEach(function(p){if(p.id)map[p.id]=p;});
+                  DB.pedidos=Object.values(map);
+                }
+              }catch(e){}
+            }
+          });
+        }
+      });
+      // Salva DB mesclado no localStorage
+      try{localStorage.setItem(KEY,JSON.stringify(DB));localStorage.setItem(KEY+'_ts',String(timestamp));}catch(e){}
+      // Recalcula hashes com dados mesclados
+      window._lastHashes.clientes=quickHash(JSON.stringify(DB.clientes||[]));
+      window._lastHashes.fin=quickHash(JSON.stringify(DB.boletos||[])+JSON.stringify(DB.despesas||[]));
+      window._lastHashes.op=quickHash(JSON.stringify(DB.fornecedores||[])+JSON.stringify(DB.entradas||[]).slice(0,200));
+      var _pc=DB.produtos||[];
+      for(var _i=0;_i<Math.ceil(_pc.length/2000)||1;_i++){
+        window._lastHashes['prod_'+_i]=quickHash(JSON.stringify(_pc.slice(_i*2000,(_i+1)*2000)));
+      }
+      _firebaseSavePending=false;_nuvemSaving=false;
+      showSI('saved');
+      cmxLog('FIREBASE','Salvo',''+writes.length+' doc(s), '+peds.length+' pedidos');
+      return;
+    }
+    var w=writes[i];i++;
+    if(w.mergeFields){
+      // Read-Merge-Write: lê doc atual do Firebase, mescla por ID, escreve resultado
+      w.ref.get().then(function(doc){
+        if(doc.exists){
+          var fbData=doc.data();
+          w.mergeFields.forEach(function(field){
+            if(w.data[field]) w.data[field]=mergeArrayField(fbData[field],w.data[field]);
+          });
+        }
+        w.ref.set(w.data).then(next).catch(function(e){onWriteError(e,w.name);});
+      }).catch(function(){
+        // Se leitura falha, escreve versão local mesmo assim
+        w.ref.set(w.data).then(next).catch(function(e){onWriteError(e,w.name);});
+      });
+    } else {
+      w.ref.set(w.data).then(next).catch(function(e){onWriteError(e,w.name);});
+    }
+  }
+  next();
 }
 
 function showSI(estado){
@@ -11963,6 +11986,17 @@ function populateParceiroSelect(selectId, valorAtual){
   });
 }
 
+function forcarUpload(){
+  if(!window.db||!window.currentUser){toast('⚠ Sem conexão','#f59e0b');return;}
+  if(!confirm('Forçar upload de TODOS os dados para a nuvem?'))return;
+  window._fbCircuitOpen=false;
+  window._fbFailCount=0;
+  window._cmxDirty={all:true,clientes:true,fin:true,op:true,produtos:true,pedidosMeses:getPedidosDocKeys()};
+  window._lastHashes={};
+  toast('🔄 Enviando todos os dados...','#3b82f6');
+  salvarNaNuvem(Date.now());
+}
+
 function sincronizarNuvem(){
   // Força recarga COMPLETA da nuvem (todos os docs mensais + meta divididos)
   if(!window.db||!window.currentUser){toast('⚠ Sem conexão com a nuvem','#f59e0b');return;}
@@ -12243,9 +12277,9 @@ function iniciarAutoBackup(){
   }
 
   window.addEventListener('beforeunload',function(ev){
-    // Cancela debounce pendente (dados já estão no localStorage)
     if(_nuvemTimer){clearTimeout(_nuvemTimer);_nuvemTimer=null;}
-    // Salva localStorage uma última vez para garantir
+    // Flush localStorage debounce para não perder dados ao fechar
+    if(_localTimer){clearTimeout(_localTimer);_localTimer=null;}
     try{localStorage.setItem(KEY,JSON.stringify(DB));localStorage.setItem(KEY+'_ts',String(Date.now()));}catch(e){}
     // Avisa se há dados não salvos no Firebase
     if(_firebaseSavePending){
@@ -12255,14 +12289,89 @@ function iniciarAutoBackup(){
     }
   });
 
-  // Quando usuário volta à aba, reseta disjuntor e tenta salvar novamente
+  // Quando usuário volta à aba: reseta disjuntor + sync com Firebase
   document.addEventListener('visibilitychange',function(){
-    if(document.visibilityState==='visible'&&window._fbCircuitOpen){
+    if(document.visibilityState!=='visible') return;
+    // Reseta disjuntor
+    if(window._fbCircuitOpen){
       window._fbCircuitOpen=false;
       window._fbFailCount=0;
       cmxLog('INFO','Firebase reativado ao voltar à aba','');
-      if(_firebaseSavePending)saveDB();
     }
+    // Sync: verifica se Firebase tem dados mais recentes
+    if(!window.db||!window.currentUser) return;
+    var uid=window.currentUser.uid;
+    var col=window.db.collection('lojas').doc(uid).collection('d');
+    col.doc('meta').get().then(function(metaDoc){
+      if(!metaDoc.exists) return;
+      var tsFirebase=metaDoc.data().ts||0;
+      var tsLocal=parseInt(localStorage.getItem(KEY+'_ts')||'0');
+      if(tsFirebase>tsLocal){
+        // Firebase tem dados mais recentes — faz reload completo
+        cmxLog('SYNC','Firebase mais recente detectado ao voltar à aba','tsF='+tsFirebase+' tsL='+tsLocal);
+        col.get().then(function(snapshot){
+          var D={};var monthlyPeds=[],legacyPeds=[];
+          snapshot.forEach(function(doc){
+            D[doc.id]=doc;
+            if(/^pedidos_\d{4}_\d{2}$/.test(doc.id)){
+              try{monthlyPeds=monthlyPeds.concat(JSON.parse(doc.data().pedidos||'[]'));}catch(e){}
+            } else if(doc.id==='pedidos1'||doc.id==='pedidos2'){
+              try{legacyPeds=legacyPeds.concat(JSON.parse(doc.data().pedidos||'[]'));}catch(e){}
+            }
+          });
+          var metaCli=D['meta_clientes'],metaFin=D['meta_fin'],metaOp=D['meta_op'];
+          var m=metaDoc.data();
+          var fbPeds=monthlyPeds.length?monthlyPeds:legacyPeds;
+          // Dedup
+          var seen={};fbPeds=fbPeds.filter(function(p){if(!p.id||seen[p.id])return false;seen[p.id]=true;return true;});
+          // Merge bidirecional por ID para cada coleção
+          function mergeBi(fbArr,localArr){
+            var map={};
+            localArr.forEach(function(r){if(r.id)map[r.id]=r;});
+            fbArr.forEach(function(r){if(r.id)map[r.id]=r;}); // Firebase vence por ser mais recente
+            return Object.values(map);
+          }
+          DB.pedidos=mergeBi(fbPeds,DB.pedidos);
+          var fbCli=metaCli&&metaCli.exists?JSON.parse(metaCli.data().clientes||'[]'):JSON.parse(m.clientes||'[]');
+          DB.clientes=mergeBi(fbCli,DB.clientes);
+          var fbProds=[];
+          Object.keys(D).filter(function(k){return k==='produtos'||/^produtos_\d+$/.test(k);})
+            .sort(function(a,b){var na=a==='produtos'?0:parseInt(a.split('_')[1]);var nb=b==='produtos'?0:parseInt(b.split('_')[1]);return na-nb;})
+            .forEach(function(k){if(D[k]&&D[k].exists){try{fbProds=fbProds.concat(JSON.parse(D[k].data().produtos||'[]'));}catch(e){}}});
+          DB.produtos=mergeBi(fbProds,DB.produtos);
+          if(metaFin&&metaFin.exists){
+            var mf=metaFin.data();
+            DB.boletos=mergeBi(JSON.parse(mf.boletos||'[]'),DB.boletos);
+            DB.despesas=mergeBi(JSON.parse(mf.despesas||'[]'),DB.despesas);
+          }
+          if(metaOp&&metaOp.exists){
+            var mo=metaOp.data();
+            DB.fornecedores=mergeBi(JSON.parse(mo.fornecedores||'[]'),DB.fornecedores);
+            DB.entradas=mergeBi(JSON.parse(mo.entradas||'[]'),DB.entradas);
+            DB.devolucoes=mergeBi(JSON.parse(mo.devolucoes||'[]'),DB.devolucoes);
+            DB.parceiros=mergeBi(JSON.parse(mo.parceiros||'[]'),DB.parceiros);
+          }
+          if(m.seq){try{var fbSeq=JSON.parse(m.seq);DB.seq.ped=Math.max(DB.seq.ped||0,fbSeq.ped||0);DB.seq.orc=Math.max(DB.seq.orc||0,fbSeq.orc||0);}catch(e){}}
+          localStorage.setItem(KEY,JSON.stringify(DB));
+          localStorage.setItem(KEY+'_ts',String(tsFirebase));
+          // Inicializa hashes com dados mesclados
+          window._lastHashes={};
+          window._lastHashes.clientes=quickHash(JSON.stringify(DB.clientes||[]));
+          window._lastHashes.fin=quickHash(JSON.stringify(DB.boletos||[])+JSON.stringify(DB.despesas||[]));
+          window._lastHashes.op=quickHash(JSON.stringify(DB.fornecedores||[])+JSON.stringify(DB.entradas||[]).slice(0,200));
+          var _pc=DB.produtos||[];
+          for(var _i=0;_i<Math.ceil(_pc.length/2000)||1;_i++){
+            window._lastHashes['prod_'+_i]=quickHash(JSON.stringify(_pc.slice(_i*2000,(_i+1)*2000)));
+          }
+          go(curPg||'dashboard');
+          cmxLog('SYNC','Dados atualizados do Firebase',''+DB.pedidos.length+' pedidos');
+          toast('🔄 Dados atualizados','#10b981');
+        });
+      } else if(tsLocal>tsFirebase&&_firebaseSavePending){
+        // Local mais recente — tenta subir
+        saveDB();
+      }
+    }).catch(function(){});
   });
 }
 
