@@ -10994,7 +10994,9 @@ function procImp(file){
 function cancelImp(){impPending=null;document.getElementById('imp-preview').style.display='none';}
 function confirImp(){
   if(!impPending)return;
-  if(!confirm('⚠ Dados atuais serão SUBSTITUÍDOS. Confirmar?'))return;
+  if(!confirm('⚠ Dados atuais serão SUBSTITUÍDOS e enviados à nuvem. Confirmar?'))return;
+  // Bloqueia QUALQUER sync/merge do Firebase até upload completar
+  window._blockSync=true;
   ['clientes','produtos','pedidos','fornecedores','entradas','devolucoes'].forEach(k=>{if(impPending[k])DB[k]=impPending[k];});
   if(impPending.seq)DB.seq={...{ped:1,orc:1,ent:1,dev:1},...impPending.seq};
   if(impPending.categorias&&impPending.categorias.length)DB.categorias=impPending.categorias;
@@ -11005,29 +11007,19 @@ function confirImp(){
   if(impPending.campanhas)DB.campanhas=impPending.campanhas;
   if(impPending.xmlMemoria)DB.xmlMemoria=impPending.xmlMemoria;
   if(impPending.config)DB.config={...DB.config,...impPending.config};
-  // Salva local imediatamente com timestamp
-  const ts = Date.now();
+  var ts = Date.now();
   localStorage.setItem(KEY, JSON.stringify(DB));
   localStorage.setItem(KEY+'_ts', String(ts));
   impPending=null;
   document.getElementById('imp-preview').style.display='none';
-  // Salva na nuvem em 4 documentos (sem limite 1MB)
-  toast('⏳ Salvando na nuvem...','#f59e0b');
-  if(window.db&&window.currentUser){
-    // Marca TUDO como dirty para que o backup completo suba ao Firebase
-    window._cmxDirty={all:true,clientes:true,fin:true,op:true,produtos:true,pedidosMeses:getPedidosDocKeys()};
-    window._lastHashes={};  // reseta hashes para forçar escrita
-    salvarNaNuvem(ts);
-    setTimeout(function(){
-      showSI();
-      go(curPg||'dashboard');
-      renderBackup();
-      toast('✓ Dados importados e salvos na nuvem!','#10b981');
-    },3000);
+  cmxLog('INFO','Backup restaurado','prods='+DB.produtos.length+' peds='+DB.pedidos.length+' clis='+DB.clientes.length);
+  go(curPg||'dashboard');
+  // Upload DIRETO via REST API (ignora SDK corrompido)
+  if(window.currentUser){
+    toast('⏳ Enviando à nuvem via REST...','#f59e0b');
+    forcarUpload();
   } else {
-    showSI();
-    go(curPg||'dashboard');
-    renderBackup();
+    window._blockSync=false;
     toast('✓ Dados importados! Faça login para sincronizar.');
   }
 }
@@ -11382,7 +11374,7 @@ function delTarefa(id){
 // SYNC AUTOMÁTICO — sincroniza silenciosamente antes de editar
 // ═══════════════════════════════════════════════════════
 function syncAntesDe(colecoes, callback){
-  if(!window.db||!window.currentUser){callback();return;}
+  if(!window.db||!window.currentUser||window._blockSync){callback();return;}
   // Se há save pendente, dados locais são mais recentes — não busca Firebase
   if(_firebaseSavePending||_nuvemSaving||_nuvemTimer){
     cmxLog('INFO','syncAntesDe ignorado — save pendente','');
@@ -12041,6 +12033,7 @@ function forcarUpload(){
         }).then(function(r){
           if(r.ok){ok++;localStorage.setItem(KEY+'_ts',String(ts));window._lastHashes={};
             showSI('saved');
+            window._blockSync=false;
             toast('✓ Upload completo! '+ok+'/'+total+' docs','#10b981');
             cmxLog('FIREBASE','Upload REST completo',''+ok+' OK, '+fail+' falhas');
           } else {fail++;r.text().then(function(t){cmxLog('ERROR','meta REST falhou',t.slice(0,80));});}
@@ -12188,7 +12181,7 @@ function iniciarListenerSync(){
 
 
 function migrarPedidosTrimestrais(){
-  if(!window.db||!window.currentUser)return;
+  if(!window.db||!window.currentUser||window._blockSync)return;
   // Não executa se há save pendente (dados locais podem ser mais recentes)
   if(_firebaseSavePending||_nuvemSaving)return;
   const uid=window.currentUser.uid;
@@ -12377,7 +12370,7 @@ function iniciarAutoBackup(){
       cmxLog('INFO','Firebase reativado ao voltar à aba','');
     }
     // Sync: verifica se Firebase tem dados mais recentes
-    if(!window.db||!window.currentUser) return;
+    if(!window.db||!window.currentUser||window._blockSync) return;
     var uid=window.currentUser.uid;
     var col=window.db.collection('lojas').doc(uid).collection('d');
     col.doc('meta').get().then(function(metaDoc){
@@ -12497,7 +12490,8 @@ window.auth.onAuthStateChanged(function(user){
       }
     }catch(e){}
     // DEPOIS: sincroniza com Firebase em segundo plano
-    col.get().then(function(snapshot){
+    if(window._blockSync){cmxLog('INFO','Auth sync bloqueado — upload em andamento','');}
+    else col.get().then(function(snapshot){
       // Carrega TODOS os docs: meta dividido + produtos + pedidos mensais + legado
       var D={};
       var monthlyPeds=[], legacyPeds=[];
