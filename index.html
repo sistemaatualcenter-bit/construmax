@@ -2499,20 +2499,14 @@ function salvarNaNuvem(ts){
                 var merged=JSON.parse(w.data[field]);
                 // Atualiza a coleção correspondente no DB
                 if(field==='clientes')DB.clientes=merged;
-                else if(field==='produtos')DB.produtos=merged;
+                else if(field==='produtos'){} // chunks — DB.produtos já correto em memória
                 else if(field==='boletos')DB.boletos=merged;
                 else if(field==='despesas')DB.despesas=merged;
                 else if(field==='fornecedores')DB.fornecedores=merged;
                 else if(field==='entradas')DB.entradas=merged;
                 else if(field==='devolucoes')DB.devolucoes=merged;
                 else if(field==='parceiros')DB.parceiros=merged;
-                else if(field==='pedidos'){
-                  // Pedidos mensais: mescla no array global por ID
-                  var map={};
-                  DB.pedidos.forEach(function(p){if(p.id)map[p.id]=p;});
-                  merged.forEach(function(p){if(p.id)map[p.id]=p;});
-                  DB.pedidos=Object.values(map);
-                }
+                else if(field==='pedidos'){} // mensal — DB.pedidos já correto em memória
               }catch(e){}
             }
           });
