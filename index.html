@@ -11987,15 +11987,93 @@ function populateParceiroSelect(selectId, valorAtual){
 }
 
 function forcarUpload(){
-  if(!window.db||!window.currentUser){toast('⚠ Sem conexão','#f59e0b');return;}
-  if(!confirm('Forçar upload de TODOS os dados para a nuvem?'))return;
-  window._fbCircuitOpen=false;
-  window._fbFailCount=0;
-  window._cmxDirty={all:true,clientes:true,fin:true,op:true,produtos:true,pedidosMeses:getPedidosDocKeys()};
-  window._lastHashes={};
-  toast('🔄 Enviando todos os dados...','#3b82f6');
-  salvarNaNuvem(Date.now());
+  if(!window.currentUser){toast('⚠ Faça login primeiro','#f59e0b');return;}
+  if(!confirm('Forçar upload DIRETO de TODOS os dados?\nIsso ignora o SDK e envia direto ao Firebase.'))return;
+  toast('🔄 Upload direto via REST API...','#3b82f6');
+  // Obtém token de autenticação
+  window.currentUser.getIdToken(true).then(function(token){
+    var uid=window.currentUser.uid;
+    var ts=Date.now();
+    var baseUrl='https://firestore.googleapis.com/v1/projects/construmax-fec4a/databases/(default)/documents/lojas/'+uid+'/d';
+    // Converte valor JS para formato Firestore REST
+    function toFsValue(val){
+      if(typeof val==='number'){
+        if(Number.isInteger(val))return{integerValue:String(val)};
+        return{doubleValue:val};
+      }
+      return{stringValue:String(val)};
+    }
+    function toFsDoc(obj){
+      var fields={};
+      Object.keys(obj).forEach(function(k){fields[k]=toFsValue(obj[k]);});
+      return{fields:fields};
+    }
+    // Monta todos os documentos
+    var meta={ts:ts,config:JSON.stringify(DB.config||{}),seq:JSON.stringify(DB.seq||{}),categorias:JSON.stringify(DB.categorias||[]),familias:JSON.stringify(DB.familias||[]),campanhas:JSON.stringify(DB.campanhas||[])};
+    var docs=[
+      {path:'meta_clientes',data:{clientes:JSON.stringify(DB.clientes||[]),ts:ts}},
+      {path:'meta_fin',data:{boletos:JSON.stringify(DB.boletos||[]),despesas:JSON.stringify(DB.despesas||[]),ts:ts}},
+      {path:'meta_op',data:{fornecedores:JSON.stringify(DB.fornecedores||[]),entradas:JSON.stringify(DB.entradas||[]),devolucoes:JSON.stringify(DB.devolucoes||[]),parceiros:JSON.stringify(DB.parceiros||[]),tarefas:JSON.stringify(DB.tarefas||[]),xmlMemoria:JSON.stringify(DB.xmlMemoria||'{}'),ts:ts}},
+    ];
+    // Produtos em chunks
+    var allP=DB.produtos||[];
+    for(var i=0;i<allP.length;i+=2000){
+      var ck=allP.slice(i,i+2000);
+      var ki=i===0?'produtos':'produtos_'+(i/2000);
+      docs.push({path:ki,data:{ts:ts,produtos:JSON.stringify(ck)}});
+    }
+    // Pedidos por mês
+    var pedsByM={};
+    (DB.pedidos||[]).forEach(function(p){var k=getPedidosDocKey(p);if(!pedsByM[k])pedsByM[k]=[];pedsByM[k].push(p);});
+    Object.keys(pedsByM).forEach(function(k){
+      docs.push({path:k,data:{ts:ts,pedidos:JSON.stringify(pedsByM[k])}});
+    });
+    // Escreve um por um via REST (PATCH)
+    var idx=0;var ok=0;var fail=0;var total=docs.length+1;
+    function writeNext(){
+      if(idx>=docs.length){
+        // Meta por último
+        showSI('pending');
+        fetch(baseUrl+'/meta?updateMask.fieldPaths=ts&updateMask.fieldPaths=config&updateMask.fieldPaths=seq&updateMask.fieldPaths=categorias&updateMask.fieldPaths=familias&updateMask.fieldPaths=campanhas',{
+          method:'PATCH',
+          headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json'},
+          body:JSON.stringify(toFsDoc(meta))
+        }).then(function(r){
+          if(r.ok){ok++;localStorage.setItem(KEY+'_ts',String(ts));window._lastHashes={};
+            showSI('saved');
+            toast('✓ Upload completo! '+ok+'/'+total+' docs','#10b981');
+            cmxLog('FIREBASE','Upload REST completo',''+ok+' OK, '+fail+' falhas');
+          } else {fail++;r.text().then(function(t){cmxLog('ERROR','meta REST falhou',t.slice(0,80));});}
+        }).catch(function(e){fail++;cmxLog('ERROR','meta REST erro',e.message||'');});
+        return;
+      }
+      var d=docs[idx];idx++;
+      var fields=Object.keys(d.data).map(function(k){return'updateMask.fieldPaths='+k;}).join('&');
+      fetch(baseUrl+'/'+d.path+'?'+fields,{
+        method:'PATCH',
+        headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json'},
+        body:JSON.stringify(toFsDoc(d.data))
+      }).then(function(r){
+        if(r.ok){
+          ok++;
+          cmxLog('INFO','REST: '+d.path+' OK','('+idx+'/'+total+')');
+        } else {
+          fail++;
+          r.text().then(function(t){cmxLog('WARN','REST: '+d.path+' falhou',t.slice(0,80));});
+        }
+        setTimeout(writeNext,500);
+      }).catch(function(e){
+        fail++;
+        cmxLog('WARN','REST: '+d.path+' erro',e.message||'');
+        setTimeout(writeNext,500);
+      });
+    }
+    writeNext();
+  }).catch(function(e){
+    toast('⚠ Erro ao obter token: '+e.message,'#ef4444');
+  });
 }
+
 
 function sincronizarNuvem(){
   // Força recarga COMPLETA da nuvem (todos os docs mensais + meta divididos)
