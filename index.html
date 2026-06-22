@@ -203,6 +203,9 @@ select.inp option{background:var(--card2)}
 </div>
 
 <div id="main">
+  <div id="fb-loading-bar" style="display:none;background:linear-gradient(90deg,#1d4ed8,#3b82f6);color:#fff;text-align:center;padding:6px 12px;font-size:12px;font-weight:600;position:sticky;top:0;z-index:999">
+    ⏳ Carregando histórico completo...
+  </div>
 
 <!-- DASHBOARD -->
 <div id="pg-dashboard" class="pg active">
@@ -2325,7 +2328,8 @@ function markDirty(colecao){
   }
 }
 
-var _localTimer=null; // debounce do localStorage
+var _localTimer=null;
+window._firebaseLoaded=false; // true quando Firebase carregou dados completos
 
 function saveDB(){
   var ts = Date.now();
@@ -2333,25 +2337,34 @@ function saveDB(){
   if(!window._cmxDirty||Object.keys(window._cmxDirty).length===0){
     window._cmxDirty={all:true};
   }
-  // localStorage com debounce 500ms (agrupa ações rápidas em 1 stringify)
   _firebaseSavePending=true;
+  // localStorage: salva apenas CACHE LEVE (pedidos últimos 30 dias + em aberto)
+  // DB completo fica em memória + Firebase
   if(_localTimer) clearTimeout(_localTimer);
   _localTimer=setTimeout(function(){
     _localTimer=null;
     try{
-      localStorage.setItem(KEY, JSON.stringify(DB));
+      var corte=new Date();corte.setDate(corte.getDate()-15);
+      var corteISO=corte.toISOString().slice(0,10);
+      var cache=Object.assign({},DB,{
+        pedidos:(DB.pedidos||[]).filter(function(p){
+          var dt=String(p.dtISO||p.dt||'').slice(0,10);
+          if(dt.indexOf('/')>=0) dt=dt.split('/').reverse().join('-');
+          var aberto=!['pago','cancelado','mesclado-pago','convertido'].includes(p.st);
+          return aberto||dt>=corteISO;
+        })
+      });
+      localStorage.setItem(KEY, JSON.stringify(cache));
       localStorage.setItem(KEY+'_ts', String(ts));
     }catch(e){
+      // Se ainda não couber, salva só em aberto (sem recentes fechados)
       try{
-        var corte=new Date();corte.setDate(corte.getDate()-120);
-        var corteISO=corte.toISOString().slice(0,10);
-        var dbReduzido=Object.assign({},DB,{
+        var cache2=Object.assign({},DB,{
           pedidos:(DB.pedidos||[]).filter(function(p){
-            var dt=String(p.dtISO||p.dt||'').slice(0,10);
-            return!['pago','cancelado','mesclado-pago','convertido'].includes(p.st)||dt>=corteISO;
+            return!['pago','cancelado','mesclado-pago','convertido'].includes(p.st);
           })
         });
-        localStorage.setItem(KEY, JSON.stringify(dbReduzido));
+        localStorage.setItem(KEY, JSON.stringify(cache2));
         localStorage.setItem(KEY+'_ts', String(ts));
       }catch(e2){}
     }
@@ -2398,6 +2411,76 @@ function quickHash(str){
   return h+'_'+str.length;
 }
 
+// ── SYNC MULTI-DISPOSITIVO ──
+function mergePorId(localArr, fbArr){
+  var map={};
+  (localArr||[]).forEach(function(r){if(r&&r.id)map[r.id]=r;});
+  (fbArr||[]).forEach(function(r){if(r&&r.id&&!map[r.id])map[r.id]=r;});
+  return Object.values(map);
+}
+
+var _listenerMeta=null;
+var _ultimoTsListener=0;
+function iniciarListenerMeta(){
+  if(_listenerMeta||!window.db||!window.currentUser) return;
+  var uid=window.currentUser.uid;
+  var metaRef=window.db.collection('lojas').doc(uid).collection('d').doc('meta');
+  _listenerMeta=metaRef.onSnapshot(function(doc){
+    if(!doc.exists) return;
+    var tsF=doc.data().ts||0;
+    if(_ultimoTsListener===0){_ultimoTsListener=tsF;return;}
+    if(tsF===_ultimoTsListener) return;
+    if(_nuvemSaving||_firebaseSavePending||window._blockSync){_ultimoTsListener=tsF;return;}
+    var tsL=parseInt(localStorage.getItem(KEY+'_ts')||'0');
+    if(tsF<=tsL){_ultimoTsListener=tsF;return;}
+    _ultimoTsListener=tsF;
+    cmxLog('SYNC','Mudança de outro dispositivo','ts='+tsF);
+    var col=window.db.collection('lojas').doc(uid).collection('d');
+    col.get().then(function(snap){
+      var D={};var mPeds=[];
+      snap.forEach(function(d){
+        D[d.id]=d;
+        if(/^pedidos_\d{4}_\d{2}$/.test(d.id)){try{mPeds=mPeds.concat(JSON.parse(d.data().pedidos||'[]'));}catch(e){}}
+      });
+      var seen={};mPeds=mPeds.filter(function(p){if(!p.id||seen[p.id])return false;seen[p.id]=true;return true;});
+      DB.pedidos=mergePorId(DB.pedidos,mPeds);
+      var mc=D['meta_clientes'],mf=D['meta_fin'],mo=D['meta_op'];
+      if(mc&&mc.exists){try{DB.clientes=mergePorId(DB.clientes,JSON.parse(mc.data().clientes||'[]'));}catch(e){}}
+      if(mf&&mf.exists){
+        try{DB.boletos=mergePorId(DB.boletos,JSON.parse(mf.data().boletos||'[]'));}catch(e){}
+        try{DB.despesas=mergePorId(DB.despesas,JSON.parse(mf.data().despesas||'[]'));}catch(e){}
+      }
+      if(mo&&mo.exists){
+        try{DB.fornecedores=mergePorId(DB.fornecedores,JSON.parse(mo.data().fornecedores||'[]'));}catch(e){}
+        try{DB.entradas=mergePorId(DB.entradas,JSON.parse(mo.data().entradas||'[]'));}catch(e){}
+        try{DB.devolucoes=mergePorId(DB.devolucoes,JSON.parse(mo.data().devolucoes||'[]'));}catch(e){}
+        try{DB.parceiros=mergePorId(DB.parceiros,JSON.parse(mo.data().parceiros||'[]'));}catch(e){}
+      }
+      var fbP=[];
+      Object.keys(D).filter(function(k){return k==='produtos'||/^produtos_\d+$/.test(k);}).sort()
+        .forEach(function(k){if(D[k]&&D[k].exists){try{fbP=fbP.concat(JSON.parse(D[k].data().produtos||'[]'));}catch(e){}}});
+      DB.produtos=mergePorId(DB.produtos,fbP);
+      var m=D['meta'];
+      if(m&&m.exists&&m.data().seq){try{var s=JSON.parse(m.data().seq);
+        DB.seq.ped=Math.max(DB.seq.ped||0,s.ped||0);DB.seq.orc=Math.max(DB.seq.orc||0,s.orc||0);
+      }catch(e){}}
+      window._lastHashes={};
+      window._lastHashes.clientes=quickHash(JSON.stringify(DB.clientes||[]));
+      window._lastHashes.fin=quickHash(JSON.stringify(DB.boletos||[])+JSON.stringify(DB.despesas||[]));
+      window._lastHashes.op=quickHash(JSON.stringify(DB.fornecedores||[])+JSON.stringify(DB.entradas||[]).slice(0,200));
+      var _pc=DB.produtos||[];
+      for(var _i=0;_i<Math.ceil(_pc.length/2000)||1;_i++){
+        window._lastHashes['prod_'+_i]=quickHash(JSON.stringify(_pc.slice(_i*2000,(_i+1)*2000)));
+      }
+      localStorage.setItem(KEY+'_ts',String(tsF));
+      window._firebaseLoaded=true;
+      go(curPg||'dashboard');
+      toast('🔄 Dados atualizados de outro dispositivo','#3b82f6');
+      cmxLog('SYNC','Merge concluído','peds='+DB.pedidos.length+' clis='+DB.clientes.length);
+    }).catch(function(){});
+  },function(){_listenerMeta=null;});
+}
+
 function salvarNaNuvem(ts){
   if(!window.db || !window.currentUser) return;
   if(window._fbCircuitOpen){_firebaseSavePending=false;_nuvemSaving=false;return;}
@@ -2430,17 +2513,17 @@ function salvarNaNuvem(ts){
   // clientes (com merge por ID)
   if(dirty.all||dirty.clientes){
     var h=quickHash(metaClientes.clientes);
-    if(h!==window._lastHashes.clientes) writes.push({ref:col.doc('meta_clientes'),data:metaClientes,name:'meta_clientes',hash:'clientes',hashVal:h,mergeFields:['clientes']});
+    if(h!==window._lastHashes.clientes) writes.push({ref:col.doc('meta_clientes'),data:metaClientes,name:'meta_clientes',hash:'clientes',hashVal:h,mergeKeys:['clientes']});
   }
   // financeiro (com merge por ID)
   if(dirty.all||dirty.fin){
     var h=quickHash(metaFin.boletos+metaFin.despesas);
-    if(h!==window._lastHashes.fin) writes.push({ref:col.doc('meta_fin'),data:metaFin,name:'meta_fin',hash:'fin',hashVal:h,mergeFields:['boletos','despesas']});
+    if(h!==window._lastHashes.fin) writes.push({ref:col.doc('meta_fin'),data:metaFin,name:'meta_fin',hash:'fin',hashVal:h,mergeKeys:['boletos','despesas']});
   }
   // operacional (com merge por ID)
   if(dirty.all||dirty.op){
     var h=quickHash(metaOp.fornecedores+metaOp.entradas.slice(0,200));
-    if(h!==window._lastHashes.op) writes.push({ref:col.doc('meta_op'),data:metaOp,name:'meta_op',hash:'op',hashVal:h,mergeFields:['fornecedores','entradas','devolucoes','parceiros']});
+    if(h!==window._lastHashes.op) writes.push({ref:col.doc('meta_op'),data:metaOp,name:'meta_op',hash:'op',hashVal:h,mergeKeys:['fornecedores','entradas','devolucoes','parceiros']});
   }
   // produtos (com merge por ID)
   if(dirty.all||dirty.produtos){
@@ -2450,13 +2533,13 @@ function salvarNaNuvem(ts){
       var idx=i/2000;
       var key=idx===0?'produtos':'produtos_'+idx;
       var h=quickHash(JSON.stringify(chunk));
-      if(h!==(window._lastHashes['prod_'+idx]||'')) writes.push({ref:col.doc(key),data:{ts:timestamp,produtos:JSON.stringify(chunk)},name:key,hash:'prod_'+idx,hashVal:h,mergeFields:['produtos']});
+      if(h!==(window._lastHashes['prod_'+idx]||'')) writes.push({ref:col.doc(key),data:{ts:timestamp,produtos:JSON.stringify(chunk)},name:key,hash:'prod_'+idx,hashVal:h,mergeKeys:['produtos']});
     }
   }
   // pedidos (com merge por ID)
   var dirtyMonths=dirty.pedidosMeses||[];
   dirtyMonths.forEach(function(k){
-    if(pedsByQ[k]) writes.push({ref:col.doc(k),data:{ts:timestamp,pedidos:JSON.stringify(pedsByQ[k])},name:k,mergeFields:['pedidos']});
+    if(pedsByQ[k]) writes.push({ref:col.doc(k),data:{ts:timestamp,pedidos:JSON.stringify(pedsByQ[k])},name:k,mergeKeys:['pedidos']});
   });
   // Se só meta (nada mudou), cancela
   if(writes.length<=1){
@@ -2464,17 +2547,6 @@ function salvarNaNuvem(ts){
   }
   // Escreve um por um em sequência (sem batch — evita fila corrompida do SDK)
   showSI('pending');
-  // Merge bidirecional: lê Firebase antes de escrever, une registros por ID
-  function mergeArrayField(fbStr, localStr){
-    var fbArr=[],localArr=[];
-    try{fbArr=JSON.parse(fbStr||'[]');}catch(e){}
-    try{localArr=JSON.parse(localStr||'[]');}catch(e){}
-    // Local vence (mudanças do usuário), mas adiciona registros do Firebase que não existem local
-    var map={};
-    fbArr.forEach(function(r){if(r&&r.id)map[r.id]=r;});
-    localArr.forEach(function(r){if(r&&r.id)map[r.id]=r;}); // local sobrescreve
-    return JSON.stringify(Object.values(map));
-  }
   var i=0;
   function onWriteError(e,wName){
     var info='';try{info=''+(e.code||e.name||'erro');}catch(x){info='erro';}
@@ -2489,32 +2561,9 @@ function salvarNaNuvem(ts){
   function next(){
     if(i>=writes.length){
       window._cmxDirty={};
+      _ultimoTsListener=timestamp; // listener ignora nosso próprio save
       window._fbFailCount=0;window._fbCircuitOpen=false;
-      // Atualiza DB em memória com dados mesclados (que foram efetivamente escritos)
-      writes.forEach(function(w){
-        if(w.mergeFields){
-          w.mergeFields.forEach(function(field){
-            if(w.data[field]){
-              try{
-                var merged=JSON.parse(w.data[field]);
-                // Atualiza a coleção correspondente no DB
-                if(field==='clientes')DB.clientes=merged;
-                else if(field==='produtos'){} // chunks — DB.produtos já correto em memória
-                else if(field==='boletos')DB.boletos=merged;
-                else if(field==='despesas')DB.despesas=merged;
-                else if(field==='fornecedores')DB.fornecedores=merged;
-                else if(field==='entradas')DB.entradas=merged;
-                else if(field==='devolucoes')DB.devolucoes=merged;
-                else if(field==='parceiros')DB.parceiros=merged;
-                else if(field==='pedidos'){} // mensal — DB.pedidos já correto em memória
-              }catch(e){}
-            }
-          });
-        }
-      });
-      // Salva DB mesclado no localStorage
-      try{localStorage.setItem(KEY,JSON.stringify(DB));localStorage.setItem(KEY+'_ts',String(timestamp));}catch(e){}
-      // Recalcula hashes com dados mesclados
+      // Recalcula hashes
       window._lastHashes.clientes=quickHash(JSON.stringify(DB.clientes||[]));
       window._lastHashes.fin=quickHash(JSON.stringify(DB.boletos||[])+JSON.stringify(DB.despesas||[]));
       window._lastHashes.op=quickHash(JSON.stringify(DB.fornecedores||[])+JSON.stringify(DB.entradas||[]).slice(0,200));
@@ -2528,18 +2577,23 @@ function salvarNaNuvem(ts){
       return;
     }
     var w=writes[i];i++;
-    if(w.mergeFields){
-      // Read-Merge-Write: lê doc atual do Firebase, mescla por ID, escreve resultado
+    // Read-merge-write: lê doc atual, mescla por ID, escreve resultado
+    if(w.mergeKeys){
       w.ref.get().then(function(doc){
         if(doc.exists){
-          var fbData=doc.data();
-          w.mergeFields.forEach(function(field){
-            if(w.data[field]) w.data[field]=mergeArrayField(fbData[field],w.data[field]);
+          var fb=doc.data();
+          w.mergeKeys.forEach(function(k){
+            if(w.data[k]&&fb[k]){
+              try{
+                var local=JSON.parse(w.data[k]||'[]');
+                var remote=JSON.parse(fb[k]||'[]');
+                w.data[k]=JSON.stringify(mergePorId(local,remote));
+              }catch(e){}
+            }
           });
         }
         w.ref.set(w.data).then(next).catch(function(e){onWriteError(e,w.name);});
       }).catch(function(){
-        // Se leitura falha, escreve versão local mesmo assim
         w.ref.set(w.data).then(next).catch(function(e){onWriteError(e,w.name);});
       });
     } else {
@@ -3176,7 +3230,8 @@ function impCrit(){
   const low=DB.produtos.filter(p=>p.est<=p.estMin);
   if(!low.length){toast('Sem itens críticos','#f59e0b');return;}
   const cfg=DB.config;
-  const w=window.open('','_blank');
+  const w=window._printCooldown=Date.now();
+  window.open('','_blank');
   w.document.write(`<html><head><meta charset="UTF-8"><title>Estoque Crítico</title>
   <style>body{font-family:Arial,sans-serif;padding:20px;font-size:11px}h2{font-size:16px}h3{color:#e65c00;font-size:13px}
   table{width:100%;border-collapse:collapse;margin-top:12px}th,td{border:1px solid #ccc;padding:6px 9px;text-align:left}th{background:#f5f5f5;font-size:10px}</style>
@@ -3249,7 +3304,7 @@ function renderClientes(resetPage){
 }
 
 function abrirCliente(id){
-  syncAntesDe([],function(){_abrirCliente(id);});
+  _abrirCliente(id);
 }
 function _abrirCliente(id){
   ['id','nome','cpf','tel','email','end','cidade','uf','obs'].forEach(f=>document.getElementById('mc-'+f).value='');
@@ -3271,12 +3326,10 @@ function _abrirCliente(id){
   openMD('cli');
 }
 function fichaCliente(id){
-  syncAntesDe([],function(){
-    _abrirCliente(id);
-    document.querySelectorAll('#md-cli .tab').forEach((t,i)=>t.classList.toggle('active',i===1));
-    document.querySelectorAll('#md-cli .tabp').forEach((t,i)=>t.classList.toggle('active',i===1));
-    renderFichaCliente(id);
-  });
+  _abrirCliente(id);
+  document.querySelectorAll('#md-cli .tab').forEach((t,i)=>t.classList.toggle('active',i===1));
+  document.querySelectorAll('#md-cli .tabp').forEach((t,i)=>t.classList.toggle('active',i===1));
+  renderFichaCliente(id);
 }
 // Aplica desconto rápido direto da ficha do cliente
 function aplicarDescontoRapido(pedId,cliId){
@@ -4483,7 +4536,8 @@ function duplicarDoc(){
 function imprimirOrcamentoDuplo(){
   const d=DB.pedidos.find(x=>x.id===docIdSelecionado);
   if(!d||d.tipo!=='orc')return;
-  const w=window.open('','_blank');
+  const w=window._printCooldown=Date.now();
+  window.open('','_blank');
   const css='<style>*{box-sizing:border-box;margin:0;padding:0}body{background:#fff}'
     +'@page{margin:10mm}.pag{page-break-after:always}.pag:last-child{page-break-after:auto}'
     +'</style>';
@@ -4658,7 +4712,8 @@ function imprimirDocId(id){
   const d=DB.pedidos.find(x=>x.id===id);if(!d)return;
   // Orçamentos usam layout redesenhado
   if(d.tipo==='orc'){
-    const w=window.open('','_blank');
+    const w=window._printCooldown=Date.now();
+  window.open('','_blank');
     w.document.write('<html><head><meta charset="UTF-8"><title>'+d.num+'</title>'
       +'<style>*{box-sizing:border-box;margin:0;padding:0}body{background:#fff}'
       +'@media print{body{padding:0}}</style>'
@@ -4670,7 +4725,8 @@ function imprimirDocId(id){
   const pago=docPago(d);const saldo=docSaldo(d);
   const cor=cfg.corImpressao||'#e65c00';
   const logo=cfg.logo||'';
-  const w=window.open('','_blank');
+  const w=window._printCooldown=Date.now();
+  window.open('','_blank');
   const logoHtml=logo
     ?'<img src="'+logo+'" style="max-height:48px;max-width:160px;object-fit:contain" alt="logo">'
     :'<div style="font-size:15px;font-weight:900;color:'+cor+'">'+(cfg.nome||'CONSTRUMAX')+'</div>';
@@ -4705,7 +4761,8 @@ function imprimirRecibo(){
   const d=DB.pedidos.find(x=>x.id===docIdSelecionado);if(!d)return;
   if(!(d.pagamentos||[]).length){toast('⚠ Nenhum pagamento registrado','#f59e0b');return;}
   const cfg=DB.config;const pago=docPago(d);const saldo=docSaldo(d);
-  const w=window.open('','_blank');
+  const w=window._printCooldown=Date.now();
+  window.open('','_blank');
   w.document.write(`<html><head><meta charset="UTF-8"><title>Recibo ${d.num}</title>
   <style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial,sans-serif;padding:20px;font-size:11px}
   .header{display:flex;justify-content:space-between;border-bottom:2px solid #333;padding-bottom:10px;margin-bottom:12px}
@@ -5028,7 +5085,8 @@ function imprimirEntregaParcial(){
       +'<td style="padding:7px 10px;text-align:center;border:1px solid #ccc"> </td>'
       +'</tr>';
   }).filter(Boolean).join('');
-  const w=window.open('','_blank');
+  const w=window._printCooldown=Date.now();
+  window.open('','_blank');
   var html='<html><head><meta charset="UTF-8"><title>Entrega '+d.num+'</title>';
   html+='<style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial,sans-serif;padding:16px 20px;font-size:10px;color:#111}';
   html+='.hdr{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid '+cor+';padding-bottom:10px;margin-bottom:12px}';
@@ -5157,7 +5215,8 @@ function imprimirRomaneio(){
     return true;
   });
   if(!pendentes.length){toast('Sem entregas pendentes para imprimir','#f59e0b');return;}
-  const w=window.open('','_blank');
+  const w=window._printCooldown=Date.now();
+  window.open('','_blank');
   var html='<html><head><meta charset="UTF-8"><title>Romaneio</title>';
   html+='<style>';
   html+='*{box-sizing:border-box;margin:0;padding:0}';
@@ -5427,7 +5486,7 @@ function calcMg(){
   } else box.style.display='none';
 }
 function abrirProduto(id){
-  syncAntesDe(['produtos'],function(){_abrirProduto(id);});
+  _abrirProduto(id);
 }
 function _abrirProduto(id){
   populateCats();
@@ -5586,7 +5645,8 @@ function imprimirEtiquetas(prods){
   const cfg=DB.config;
   const loja=(cfg.nome||'CONSTRUMAX').toUpperCase();
   const cor=cfg.corImpressao||'#e65c00';
-  const w=window.open('','_blank');
+  const w=window._printCooldown=Date.now();
+  window.open('','_blank');
   // 105×30mm — em CSS @page e divs
   var html='<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Etiquetas</title>';
   html+='<style>';
@@ -5950,7 +6010,7 @@ function renderFornecedores(){
   }).join(''):`<tr><td colspan="9" class="es">Nenhum fornecedor</td></tr>`;
 }
 function abrirFornecedor(id){
-  syncAntesDe([],function(){_abrirFornecedor(id);});
+  _abrirFornecedor(id);
 }
 function _abrirFornecedor(id){
   ['id','nome','cnpj','tel','contato','email','end','cidade','obs'].forEach(f=>document.getElementById('mf-'+f).value='');
@@ -6008,7 +6068,8 @@ function relatorioFornecedor(forId){
   var totalItens=lista.length;
   var totalComprado=lista.reduce(function(s,it){return s+it.qtdTotal*it.ultimoCusto;},0);
   // Gera PDF via window.open + print
-  var w=window.open('','_blank');
+  var w=window._printCooldown=Date.now();
+  window.open('','_blank');
   var html='<html><head><meta charset="UTF-8"><title>Relatório '+f.nome+'</title>';
   html+='<style>'
     +'*{box-sizing:border-box;margin:0;padding:0}'
@@ -6131,7 +6192,7 @@ function getParCatsSelected(){
   return Array.from(checks).map(function(c){return c.value;});
 }
 function abrirParceiro(id){
-  syncAntesDe([],function(){_abrirParceiro(id);});
+  _abrirParceiro(id);
 }
 function _abrirParceiro(id){
   if(!DB.parceiros)DB.parceiros=[];
@@ -7528,7 +7589,8 @@ function imprimirRomaneioNF(id){
     };
   }).filter(function(l){return l.nome;});
   if(!linhas.length){toast('⚠ Nenhum item nesta entrada','#f59e0b');return;}
-  const w=window.open('','_blank');
+  const w=window._printCooldown=Date.now();
+  window.open('','_blank');
   var html='<html><head><meta charset="UTF-8"><title>Romaneio '+ent.nfnum+'</title>';
   html+='<style>'
     +'*{box-sizing:border-box;margin:0;padding:0}'
@@ -7600,7 +7662,7 @@ function fecharModalEnt(){
   closeMD('ent');
 }
 function abrirEntrada(){
-  syncAntesDe(['produtos'],function(){_abrirEntrada();});
+  _abrirEntrada();
 }
 function _abrirEntrada(){
   nfItens=[];
@@ -8100,7 +8162,7 @@ function finMostrarAba(aba){
 // DESPESAS
 // ═══════════════════════════════════════════════════════
 function abrirDespesa(tipo,id){
-  syncAntesDe([],function(){_abrirDespesa(tipo,id);});
+  _abrirDespesa(tipo,id);
 }
 function _abrirDespesa(tipo,id){
   if(!DB.despesas)DB.despesas=[];
@@ -8349,6 +8411,7 @@ function limparRelPrazo(){
   renderRelPrazo();
 }
 function renderRelPrazo(){
+  if(!window._firebaseLoaded){toast('⏳ Aguarde o histórico carregar...','#3b82f6');return;}
   const ini=document.getElementById('rel-prazo-ini')?.value||'';
   const fim=document.getElementById('rel-prazo-fim')?.value||'';
   const prazoForms=['prazo','boleto','receber no local'];
@@ -8665,6 +8728,7 @@ function limparDRE(){
   renderDRE();
 }
 function renderDRE(){
+  if(!window._firebaseLoaded){toast('⏳ Aguarde o histórico carregar...','#3b82f6');return;}
   const ini=document.getElementById('dre-ini')?.value||'';
   const fim=document.getElementById('dre-fim')?.value||'';
   const corpo=document.getElementById('dre-corpo');
@@ -8807,9 +8871,11 @@ function renderDRE(){
 }
 
 function imprimirDRE(){
+  if(!window._firebaseLoaded){toast('⏳ Aguarde o histórico carregar...','#3b82f6');return;}
   const corpo=document.getElementById('dre-corpo');
   if(!corpo||!corpo.innerHTML){toast('⚠ Gere o DRE primeiro','#f59e0b');return;}
-  const win=window.open('','_blank');
+  const win=window._printCooldown=Date.now();
+  window.open('','_blank');
   win.document.write('<html><head><title>DRE — '+DB.config.nome+'</title>'
     +'<style>body{font-family:sans-serif;padding:20px;color:#111}*{box-sizing:border-box}</style></head><body>'
     +'<h2 style="margin-bottom:4px">'+DB.config.nome+'</h2>'
@@ -9089,6 +9155,7 @@ function renderVendasGro(){
 }
 
 function imprimirVendasGro(){
+  if(!window._firebaseLoaded){toast('⏳ Aguarde o histórico carregar...','#3b82f6');return;}
   const cd=DB.config.catDestaque||'Grosseiro';
   const cfg=DB.config;
   const cor=cfg.corImpressao||'#e65c00';
@@ -9132,7 +9199,8 @@ function imprimirVendasGro(){
     :ini?'A partir de '+ini.split('-').reverse().join('/')
     :fim?'Até '+fim.split('-').reverse().join('/'):'Todo o período';
 
-  const w=window.open('','_blank');
+  const w=window._printCooldown=Date.now();
+  window.open('','_blank');
   var html='<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Vendas '+cd+'</title>';
   html+='<style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial,sans-serif;padding:16px 20px;font-size:10px;color:#111}';
   html+='.header{border-bottom:3px solid '+cor+';padding-bottom:8px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:flex-start}';
@@ -9551,6 +9619,7 @@ function renderVendasProdGrosseiro(){
 }
 
 function imprimirVendasProdGrosseiro(){
+  if(!window._firebaseLoaded){toast('⏳ Aguarde o histórico carregar...','#3b82f6');return;}
   const cd=DB.config.catDestaque||'Grosseiro';
   const cfg=DB.config;
   const cor=cfg.corImpressao||'#e65c00';
@@ -9605,7 +9674,8 @@ function imprimirVendasProdGrosseiro(){
     :ini?'a partir de '+ini.split('-').reverse().join('/')
     :fim?'até '+fim.split('-').reverse().join('/'):'Todo o período';
 
-  const w=window.open('','_blank');
+  const w=window._printCooldown=Date.now();
+  window.open('','_blank');
   var html='<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Vendas '+cd+'</title>';
   html+='<style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial,sans-serif;padding:16px 20px;font-size:10px;color:#111}';
   html+='.header{border-bottom:3px solid '+cor+';padding-bottom:8px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:flex-start}';
@@ -9669,6 +9739,7 @@ function imprimirVendasProdGrosseiro(){
   setTimeout(function(){w.print();},400);
 }
 function renderRelGrosseiro(){
+  if(!window._firebaseLoaded){toast('⏳ Aguarde o histórico carregar...','#3b82f6');return;}
   const cd=DB.config.catDestaque||'Grosseiro';
   // Lê filtro do bloco que tiver valor preenchido (dois blocos no HTML)
   const ini=document.getElementById('rel-gro-ini')?.value||document.getElementById('rel-gross-ini')?.value||'';
@@ -9811,6 +9882,7 @@ function renderRelGrosseiro(){
   if(totalEl)totalEl.innerHTML=`Recebido período: <span style="color:var(--or)">${fmt(totalVendas)}</span> &nbsp;·&nbsp; Recebimentos anteriores: <span style="color:#10b981">${fmt(totalRecebido)}</span> &nbsp;·&nbsp; Total: <span style="color:#a78bfa">${fmt(totalVendas+totalRecebido)}</span> &nbsp;·&nbsp; Saldo aberto: <span style="color:#3b82f6">${fmt(saldoGro)}</span>`;
 }
 function imprimirRelGrosseiro(){
+  if(!window._firebaseLoaded){toast('⏳ Aguarde o histórico carregar...','#3b82f6');return;}
   sincFiltrosGro();
   const cd=DB.config.catDestaque||'Grosseiro';
   const cfg=DB.config;
@@ -9882,7 +9954,8 @@ function imprimirRelGrosseiro(){
   const periodoStr=ini&&fim?ini.split('-').reverse().join('/')+' a '+fim.split('-').reverse().join('/')
     :ini?'a partir de '+ini.split('-').reverse().join('/')
     :fim?'até '+fim.split('-').reverse().join('/'):'Todos os períodos';
-  const w=window.open('','_blank');
+  const w=window._printCooldown=Date.now();
+  window.open('','_blank');
   var html='<html><head><meta charset="UTF-8"><title>Relatório '+cd+'</title>';
   html+='<style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial,sans-serif;padding:16px 20px;font-size:10px;color:#111}';
   html+='.header{border-bottom:3px solid '+cor+';padding-bottom:8px;margin-bottom:12px;display:flex;justify-content:space-between}';
@@ -10293,13 +10366,15 @@ function renderRelatorios(){
 }
 
 function imprimirInadimplencia(){
+  if(!window._firebaseLoaded){toast('⏳ Aguarde o histórico carregar...','#3b82f6');return;}
   const cfg=DB.config;
   const hoje2=new Date();
   const inadim=DB.pedidos
     .filter(d=>d.tipo==='ped'&&isAtivo(d)&&docSaldo(d)>0)
     .sort((a,b)=>new Date(a.dtISO||'2000')-new Date(b.dtISO||'2000'));
   const totalInadim=inadim.reduce((s,d)=>s+docSaldo(d),0);
-  const w=window.open('','_blank');
+  const w=window._printCooldown=Date.now();
+  window.open('','_blank');
   w.document.write(`<html><head><meta charset="UTF-8"><title>Inadimplência</title>
   <style>body{font-family:Arial,sans-serif;padding:20px;font-size:10px}
   h2{font-size:15px}h3{color:#c00;font-size:12px;margin:4px 0}
@@ -10360,7 +10435,8 @@ function imprimirDevolucao(id){
   const logoHtml=logo
     ?'<img src="'+logo+'" style="max-height:44px;max-width:150px;object-fit:contain">'
     :'<div style="font-size:15px;font-weight:900;color:'+cor+'">'+(cfg.nome||'CONSTRUMAX')+'</div>';
-  const w=window.open('','_blank');
+  const w=window._printCooldown=Date.now();
+  window.open('','_blank');
   const itens=dev.itens||[];
   const rows=itens.map(it=>'<tr>'
     +'<td style="font-weight:600">'+it.nome+'</td>'
@@ -11436,6 +11512,7 @@ function getProximoNumPed(tipo,callback){
 
 
 function gerarRelatorioDiaPNG(){
+  if(!window._firebaseLoaded){toast('⏳ Aguarde o histórico carregar...','#3b82f6');return;}
   const ini = document.getElementById('dash-dt-ini')?.value||'';
   const fim = document.getElementById('dash-dt-fim')?.value||'';
   const cfm = catFilModo||'com';
@@ -12345,7 +12422,14 @@ function iniciarAutoBackup(){
     if(_nuvemTimer){clearTimeout(_nuvemTimer);_nuvemTimer=null;}
     // Flush localStorage debounce para não perder dados ao fechar
     if(_localTimer){clearTimeout(_localTimer);_localTimer=null;}
-    try{localStorage.setItem(KEY,JSON.stringify(DB));localStorage.setItem(KEY+'_ts',String(Date.now()));}catch(e){}
+    try{
+      var corte=new Date();corte.setDate(corte.getDate()-15);var corteISO=corte.toISOString().slice(0,10);
+      var cache=Object.assign({},DB,{pedidos:(DB.pedidos||[]).filter(function(p){
+        var dt=String(p.dtISO||p.dt||'').slice(0,10);if(dt.indexOf('/')>=0)dt=dt.split('/').reverse().join('-');
+        return!['pago','cancelado','mesclado-pago','convertido'].includes(p.st)||dt>=corteISO;
+      })});
+      localStorage.setItem(KEY,JSON.stringify(cache));localStorage.setItem(KEY+'_ts',String(Date.now()));
+    }catch(e){}
     // Avisa se há dados não salvos no Firebase
     if(_firebaseSavePending){
       ev.preventDefault();
@@ -12357,6 +12441,8 @@ function iniciarAutoBackup(){
   // Quando usuário volta à aba: reseta disjuntor + sync com Firebase
   document.addEventListener('visibilitychange',function(){
     if(document.visibilityState!=='visible') return;
+    // Cooldown: não sincroniza se acabou de imprimir (evita travamento ao voltar da aba de impressão)
+    if(window._printCooldown&&Date.now()-window._printCooldown<10000) return;
     // Reseta disjuntor
     if(window._fbCircuitOpen){
       window._fbCircuitOpen=false;
@@ -12430,6 +12516,8 @@ function iniciarAutoBackup(){
           }
           go(curPg||'dashboard');
           cmxLog('SYNC','Dados atualizados do Firebase',''+DB.pedidos.length+' pedidos');
+          window._firebaseLoaded=true;
+          var _flb4=document.getElementById('fb-loading-bar');if(_flb4)_flb4.style.display='none';
           toast('🔄 Dados atualizados','#10b981');
         });
       } else if(tsLocal>tsFirebase&&_firebaseSavePending){
@@ -12478,6 +12566,18 @@ window.auth.onAuthStateChanged(function(user){
         DB=JSON.parse(localRaw);
         loadDB(); // normaliza estrutura
         window._localPreloaded=true;
+        // Mostra indicador de carregamento até Firebase completar
+        var _flb=document.getElementById('fb-loading-bar');
+        if(_flb)_flb.style.display='block';
+        // Timeout: se Firebase não carregar em 15s, esconde barra (usa cache)
+        setTimeout(function(){
+          if(!window._firebaseLoaded){
+            window._firebaseLoaded=true;
+            var _flbt=document.getElementById('fb-loading-bar');
+            if(_flbt)_flbt.textContent='⚠ Histórico parcial — sem conexão com a nuvem';
+            setTimeout(function(){if(_flbt)_flbt.style.display='none';},5000);
+          }
+        },15000);
         go('dashboard'); // renderiza imediatamente
         localLoaded=true;
         cmxLog('SYNC','Dados locais carregados instantaneamente',''+DB.pedidos.length+' pedidos');
@@ -12562,6 +12662,8 @@ window.auth.onAuthStateChanged(function(user){
           localStorage.setItem(KEY,JSON.stringify(DB));
           localStorage.setItem(KEY+'_ts',String(metaDoc.data().ts||Date.now()));
           cmxLog('SYNC','Login: dados carregados',''+DB.pedidos.length+' pedidos, '+DB.clientes.length+' clientes');
+          window._firebaseLoaded=true;
+          var _flb2=document.getElementById('fb-loading-bar');if(_flb2)_flb2.style.display='none';
           // Inicializa hashes para que o primeiro save não reescreva tudo
           try{
             window._lastHashes=window._lastHashes||{};
@@ -12611,8 +12713,11 @@ window.auth.onAuthStateChanged(function(user){
           salvarNaNuvem(Date.now());
         }
       }
-      if(!localLoaded)initApp();
+      window._firebaseLoaded=true;
+      var _flb3=document.getElementById('fb-loading-bar');if(_flb3)_flb3.style.display='none';
+      if(!localLoaded){initApp();iniciarListenerMeta();}
       else{loadDB();go(curPg||'dashboard');cmxLog('SYNC','Firebase carregado — tela atualizada','');}
+      iniciarListenerMeta();
     }).catch(function(e){
       // Subcoleção não existe — tenta doc legado único
       console.warn('Subcoleção não encontrada, tentando legado:',e);
