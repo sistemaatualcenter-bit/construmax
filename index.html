@@ -2499,7 +2499,7 @@ function salvarNaNuvem(ts){
   var col = window.db.collection('lojas').doc(uid).collection('d');
   var peds = DB.pedidos||[];
   var pedsByQ={};
-  peds.forEach(function(p){var k=getPedidosDocKey(p);if(!pedsByQ[k])pedsByQ[k]=[];pedsByQ[k].push(p);});
+  peds.forEach(function(p){var k=getPedidosDocKey(p.dtISO||p.dt||'');if(!pedsByQ[k])pedsByQ[k]=[];pedsByQ[k].push(p);});
   var meta={ts:timestamp,config:JSON.stringify(DB.config||{}),seq:JSON.stringify(DB.seq||{}),categorias:JSON.stringify(DB.categorias||[]),familias:JSON.stringify(DB.familias||[]),campanhas:JSON.stringify(DB.campanhas||[])};
   var metaClientes={clientes:JSON.stringify(DB.clientes||[]),ts:timestamp};
   var metaFin={boletos:JSON.stringify(DB.boletos||[]),despesas:JSON.stringify(DB.despesas||[]),ts:timestamp};
@@ -12087,7 +12087,7 @@ function forcarUpload(){
     }
     // Pedidos por mês
     var pedsByM={};
-    (DB.pedidos||[]).forEach(function(p){var k=getPedidosDocKey(p);if(!pedsByM[k])pedsByM[k]=[];pedsByM[k].push(p);});
+    (DB.pedidos||[]).forEach(function(p){var k=getPedidosDocKey(p.dtISO||p.dt||'');if(!pedsByM[k])pedsByM[k]=[];pedsByM[k].push(p);});
     Object.keys(pedsByM).forEach(function(k){
       docs.push({path:k,data:{ts:ts,pedidos:JSON.stringify(pedsByM[k])}});
     });
