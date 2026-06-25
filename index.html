@@ -2339,7 +2339,13 @@ function saveDB(){
   _localTimer=setTimeout(function(){
     _localTimer=null;
     try{
-      localStorage.setItem(KEY, JSON.stringify(DB));
+      // Cache inteligente: só pedidos últimos 15 dias + em aberto (evita estourar 5MB)
+      var _corte=new Date();_corte.setDate(_corte.getDate()-15);var _corteISO=_corte.toISOString().slice(0,10);
+      var _cache=Object.assign({},DB,{pedidos:(DB.pedidos||[]).filter(function(p){
+        var dt=String(p.dtISO||p.dt||'').slice(0,10);if(dt.indexOf('/')>=0)dt=dt.split('/').reverse().join('-');
+        return!['pago','cancelado','mesclado-pago','convertido'].includes(p.st)||dt>=_corteISO;
+      })});
+      localStorage.setItem(KEY, JSON.stringify(_cache));
       localStorage.setItem(KEY+'_ts', String(ts));
     }catch(e){
       try{
@@ -2416,7 +2422,7 @@ function salvarNaNuvem(ts){
   var col = window.db.collection('lojas').doc(uid).collection('d');
   var peds = DB.pedidos||[];
   var pedsByQ={};
-  peds.forEach(function(p){var k=getPedidosDocKey(p);if(!pedsByQ[k])pedsByQ[k]=[];pedsByQ[k].push(p);});
+  peds.forEach(function(p){var k=getPedidosDocKey(p.dtISO||p.dt||'');if(!pedsByQ[k])pedsByQ[k]=[];pedsByQ[k].push(p);});
   var meta={ts:timestamp,config:JSON.stringify(DB.config||{}),seq:JSON.stringify(DB.seq||{}),categorias:JSON.stringify(DB.categorias||[]),familias:JSON.stringify(DB.familias||[]),campanhas:JSON.stringify(DB.campanhas||[])};
   var metaClientes={clientes:JSON.stringify(DB.clientes||[]),ts:timestamp};
   var metaFin={boletos:JSON.stringify(DB.boletos||[]),despesas:JSON.stringify(DB.despesas||[]),ts:timestamp};
@@ -2478,8 +2484,13 @@ function salvarNaNuvem(ts){
   var i=0;
   function onWriteError(e,wName){
     var info='';try{info=''+(e.code||e.name||'erro');}catch(x){info='erro';}
-    cmxLog('WARN','Firebase write falhou: '+wName,info);
     _firebaseSavePending=false;_nuvemSaving=false;showSI('saved');
+    // RangeError = SDK corrompido — reseta conexão silenciosamente
+    if(info.indexOf('Range')>=0){
+      try{window.db.terminate().then(function(){window.db=firebase.firestore();}).catch(function(){window.db=firebase.firestore();});}catch(x){window.db=firebase.firestore();}
+      window._fbFailCount=0;return;
+    }
+    cmxLog('WARN','Firebase write falhou: '+wName,info);
     window._fbFailCount=(window._fbFailCount||0)+1;
     if(window._fbFailCount>=3&&!window._fbCircuitOpen){
       window._fbCircuitOpen=true;
@@ -12010,7 +12021,7 @@ function forcarUpload(){
     }
     // Pedidos por mês
     var pedsByM={};
-    (DB.pedidos||[]).forEach(function(p){var k=getPedidosDocKey(p);if(!pedsByM[k])pedsByM[k]=[];pedsByM[k].push(p);});
+    (DB.pedidos||[]).forEach(function(p){var k=getPedidosDocKey(p.dtISO||p.dt||'');if(!pedsByM[k])pedsByM[k]=[];pedsByM[k].push(p);});
     Object.keys(pedsByM).forEach(function(k){
       docs.push({path:k,data:{ts:ts,pedidos:JSON.stringify(pedsByM[k])}});
     });
@@ -12345,7 +12356,14 @@ function iniciarAutoBackup(){
     if(_nuvemTimer){clearTimeout(_nuvemTimer);_nuvemTimer=null;}
     // Flush localStorage debounce para não perder dados ao fechar
     if(_localTimer){clearTimeout(_localTimer);_localTimer=null;}
-    try{localStorage.setItem(KEY,JSON.stringify(DB));localStorage.setItem(KEY+'_ts',String(Date.now()));}catch(e){}
+    try{
+      var _c=new Date();_c.setDate(_c.getDate()-15);var _ci=_c.toISOString().slice(0,10);
+      var _cc=Object.assign({},DB,{pedidos:(DB.pedidos||[]).filter(function(p){
+        var dt=String(p.dtISO||p.dt||'').slice(0,10);if(dt.indexOf('/')>=0)dt=dt.split('/').reverse().join('-');
+        return!['pago','cancelado','mesclado-pago','convertido'].includes(p.st)||dt>=_ci;
+      })});
+      localStorage.setItem(KEY,JSON.stringify(_cc));localStorage.setItem(KEY+'_ts',String(Date.now()));
+    }catch(e){}
     // Avisa se há dados não salvos no Firebase
     if(_firebaseSavePending){
       ev.preventDefault();
@@ -12612,7 +12630,7 @@ window.auth.onAuthStateChanged(function(user){
         }
       }
       if(!localLoaded)initApp();
-      else{loadDB();go(curPg||'dashboard');cmxLog('SYNC','Firebase carregado — tela atualizada','');}
+      else{go(curPg||'dashboard');cmxLog('SYNC','Firebase carregado — tela atualizada','');}
     }).catch(function(e){
       // Subcoleção não existe — tenta doc legado único
       console.warn('Subcoleção não encontrada, tentando legado:',e);
