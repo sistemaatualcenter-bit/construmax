@@ -3316,8 +3316,8 @@ function pgtoRapidoFicha(pedId,cliId){
   if(!d||!valor)return;
   var saldo=docSaldo(d);
   if(valor>saldo){toast('⚠ Valor maior que o saldo ('+fmt(saldo)+')','#f59e0b');return;}
-  if(!d.pgtos)d.pgtos=[];
-  d.pgtos.push({valor:valor,dt:hj(),forma:d.pag||'dinheiro'});
+  if(!d.pagamentos)d.pagamentos=[];
+  d.pagamentos.push({valor:valor,dt:hj(),dtISO:dtHtml(),forma:d.pag||'dinheiro',obs:''});
   if(docSaldo(d)<=0)d.st='pago';
   markDirty('pedidos');saveDB();
   renderFichaCliente(cliId,'aberto');
@@ -4213,7 +4213,7 @@ function registrarPagamento(){
     toast('✓ '+fmt(valor)+' registrado. Devedor: '+fmt(docSaldo(d)));
   }
   salvarRegistro('pedidos',d.id,d);
-  saveDB();renderPagsModal(d);renderPedidos();
+  markDirty('pedidos');saveDB();renderPagsModal(d);renderPedidos();
 }
 function delPagamento(id,idx){
   const d=DB.pedidos.find(x=>x.id===id);if(!d)return;
