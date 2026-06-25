@@ -3431,7 +3431,7 @@ function delCliente(id){
   }
   DB.clientes=DB.clientes.filter(c=>c.id!==id);
   deletarRegistro('clientes',id);
-  saveDB();renderClientes();toast('Cliente removido','#ef4444');
+  markDirty('clientes');saveDB();renderClientes();toast('Cliente removido','#ef4444');
 }
 function abrirCliRapido(){
   ['nome','tel','cpf','cidade'].forEach(f=>document.getElementById('cr-'+f).value='');
@@ -4228,7 +4228,7 @@ function deletarDocAtual(){
   if(d&&d.tipo==='ped'&&isAtivo(d))restaurarEstoque(d);
   DB.pedidos=DB.pedidos.filter(p=>p.id!==docIdSelecionado);
   deletarRegistro('pedidos',docIdSelecionado);
-  saveDB();closeMD('ver');renderPedidos();renderOrcamentos();toast('Excluído','#ef4444');
+  markDirty('pedidos');saveDB();closeMD('ver');renderPedidos();renderOrcamentos();toast('Excluído','#ef4444');
 }
 function mudaStatus(id,st){
   const d=DB.pedidos.find(x=>x.id===id);if(!d)return;
@@ -4920,7 +4920,7 @@ function delDoc(id){
   const d=DB.pedidos.find(x=>x.id===id);
   if(d&&d.tipo==='ped'&&isAtivo(d))restaurarEstoque(d);
   DB.pedidos=DB.pedidos.filter(p=>p.id!==id);
-  saveDB();renderPedidos();renderOrcamentos();toast('Excluído','#ef4444');
+  markDirty('pedidos');saveDB();renderPedidos();renderOrcamentos();toast('Excluído','#ef4444');
 }
 
 // ═══════════════════════════════════════════════════════
@@ -5565,7 +5565,7 @@ function delProduto(id){
     toast('⚠ Produto está em '+pedComProd.length+' pedido(s) ativo(s). Não é possível excluir.','#ef4444');
     return;
   }
-  if(!confirm('Remover produto?'))return;DB.produtos=DB.produtos.filter(p=>p.id!==id);deletarRegistro('produtos',id);saveDB();renderProdutos();toast('Removido','#ef4444');}
+  if(!confirm('Remover produto?'))return;DB.produtos=DB.produtos.filter(p=>p.id!==id);deletarRegistro('produtos',id);markDirty('produtos');saveDB();renderProdutos();toast('Removido','#ef4444');}
 
 // ═══════════════════════════════════════════════════════
 // ESTOQUE
@@ -6113,7 +6113,7 @@ function delFornecedor(id){
   } else {
     if(!confirm('Remover?'))return;
   }DB.fornecedores=DB.fornecedores.filter(f=>f.id!==id);deletarRegistro('fornecedores',id);
-  saveDB();renderFornecedores();toast('Removido','#ef4444');}
+  markDirty('op');saveDB();renderFornecedores();toast('Removido','#ef4444');}
 
 // ═══════════════════════════════════════════════════════
 // ═══════════════════════════════════════════════════════
@@ -6588,7 +6588,7 @@ function delBoleto(id){
   if(!confirm('Remover este boleto?'))return;
   DB.boletos=DB.boletos.filter(b=>b.id!==id);
   deletarRegistro('boletos',id);
-  saveDB();renderContasPagar();toast('Boleto removido','#ef4444');
+  markDirty('fin');saveDB();renderContasPagar();toast('Boleto removido','#ef4444');
 }
 function abrirPagBoleto(id){
   const b=DB.boletos.find(x=>x.id===id);if(!b)return;
@@ -7847,7 +7847,7 @@ function salvarEntrada(){
   markDirty('op');markDirty('produtos');saveDB();closeMD('ent');renderEntradas();renderEstoque();
 }
 function delEntrada(id){if(!confirm('Remover?'))return;DB.entradas=DB.entradas.filter(e=>e.id!==id);deletarRegistro('entradas',id);
-  saveDB();renderEntradas();toast('Removida','#ef4444');}
+  markDirty('op');saveDB();renderEntradas();toast('Removida','#ef4444');}
 
 // ═══════════════════════════════════════════════════════
 // FINANCEIRO
@@ -10619,7 +10619,7 @@ function delDevolucao(id){
     if(!confirm('Este crédito já foi aplicado em um pedido. Excluir mesmo assim?'))return;
   } else {
     if(!confirm('Remover?'))return;
-  }DB.devolucoes=DB.devolucoes.filter(d=>d.id!==id);saveDB();renderDevolucoes();toast('Removida','#ef4444');}
+  }DB.devolucoes=DB.devolucoes.filter(d=>d.id!==id);markDirty('op');saveDB();renderDevolucoes();toast('Removida','#ef4444');}
 
 // ═══════════════════════════════════════════════════════
 // CONFIG
@@ -11372,7 +11372,7 @@ function cancelarTarefa(id){
 function delTarefa(id){
   if(!confirm('Excluir esta tarefa?'))return;
   DB.tarefas=DB.tarefas.filter(t=>t.id!==id);
-  saveDB();renderTarefas();
+  markDirty('op');saveDB();renderTarefas();
 }
 
 // ═══════════════════════════════════════════════════════
