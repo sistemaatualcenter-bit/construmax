@@ -6095,9 +6095,9 @@ function salvarFornecedor(){
     end:document.getElementById('mf-end').value,cidade:document.getElementById('mf-cidade').value,
     prazo:parseInt(document.getElementById('mf-prazo').value)||30,obs:document.getElementById('mf-obs').value};
   if(id){DB.fornecedores=DB.fornecedores.map(f=>f.id===id?{...f,...obj}:f);toast('✓ Fornecedor atualizado');}
-  else{DB.fornecedores.push({...obj,id:uid(),dt:hj()});toast('✓ Fornecedor cadastrado');}
-  const _fid=document.getElementById('mf-id').value||_newFid;
-const _fd=DB.fornecedores.find(f=>f.id===_fid);if(_fd)salvarRegistro('fornecedores',_fid,_fd);
+  else{const _newFid=uid();DB.fornecedores.push({...obj,id:_newFid,dt:hj()});toast('✓ Fornecedor cadastrado');}
+  const _fid=document.getElementById('mf-id').value||(DB.fornecedores[DB.fornecedores.length-1]?.id||'');
+  const _fd=DB.fornecedores.find(f=>f.id===(id||_fid));if(_fd)salvarRegistro('fornecedores',_fd.id,_fd);
   markDirty('op');saveDB();closeMD('for');renderFornecedores();
 }
 function delFornecedor(id){
@@ -10595,7 +10595,7 @@ function usarCredito(id){
     if(!confirm(`Nenhum pedido em aberto encontrado para ${dev.cliNome}.\nMarcar crédito como utilizado mesmo assim?`))return;
   }
   DB.devolucoes=DB.devolucoes.map(d=>d.id===id?{...d,creditoStatus:'usado'}:d);
-  saveDB();renderDevolucoes();
+  markDirty('op');saveDB();renderDevolucoes();
 }
 function aplicarCreditoNoPedido(devId, pedId){
   const dev=DB.devolucoes.find(d=>d.id===devId);
@@ -10607,7 +10607,7 @@ function aplicarCreditoNoPedido(devId, pedId){
   ped.pagamentos.push({dt:hj(),dtISO:dtHtml(),valor:aplicar,forma:'crédito devolução',obs:`Crédito ${dev.numDev} aplicado`});
   if(docSaldo(ped)<=0)ped.st='pago';
   DB.devolucoes=DB.devolucoes.map(d=>d.id===devId?{...d,creditoStatus:'usado'}:d);
-  markDirty('op');saveDB();
+  markDirty('op');markDirty('pedidos');saveDB();
   renderPedidos();
   renderDevolucoes();
   verDoc(pedId);// Reabrir o modal atualizado
