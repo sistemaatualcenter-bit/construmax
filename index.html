@@ -6949,9 +6949,10 @@ function mostrarPreviewXML(d){
       +'</td>'
       +'</tr>';
 
-    // Linha extra para itens novos
-    if(it.status!=='encontrado'){
-      html+='<tr id="xml-extra-'+i+'" style="background:'+rowBg+';border-top:1px dashed '+rowBorder+'">'
+    // Linha extra para itens novos — SEMPRE criada, visibilidade controlada via display
+    {
+      const dispExtra=it.status==='encontrado'?'none':'';
+      html+='<tr id="xml-extra-'+i+'" style="display:'+dispExtra+';background:'+rowBg+';border-top:1px dashed '+rowBorder+'">'
         +'<td colspan="5" style="padding:8px 10px;border-left:3px solid '+rowBorder+'">'
         +'<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
         +'<div style="display:flex;align-items:center;gap:5px;flex:2;min-width:180px">'
