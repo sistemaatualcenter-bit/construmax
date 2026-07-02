@@ -3188,6 +3188,7 @@ function impCrit(){
   if(!low.length){toast('Sem itens críticos','#f59e0b');return;}
   const cfg=DB.config;
   const w=window.open('','_blank');
+  if(!w){toast('⚠ Pop-up bloqueado. Permita pop-ups para este site e tente novamente.','#ef4444');return;}
   w.document.write(`<html><head><meta charset="UTF-8"><title>Estoque Crítico</title>
   <style>body{font-family:Arial,sans-serif;padding:20px;font-size:11px}h2{font-size:16px}h3{color:#e65c00;font-size:13px}
   table{width:100%;border-collapse:collapse;margin-top:12px}th,td{border:1px solid #ccc;padding:6px 9px;text-align:left}th{background:#f5f5f5;font-size:10px}</style>
@@ -4495,6 +4496,7 @@ function imprimirOrcamentoDuplo(){
   const d=DB.pedidos.find(x=>x.id===docIdSelecionado);
   if(!d||d.tipo!=='orc')return;
   const w=window.open('','_blank');
+  if(!w){toast('⚠ Pop-up bloqueado. Permita pop-ups para este site e tente novamente.','#ef4444');return;}
   const css='<style>*{box-sizing:border-box;margin:0;padding:0}body{background:#fff}'
     +'@page{margin:10mm}.pag{page-break-after:always}.pag:last-child{page-break-after:auto}'
     +'</style>';
@@ -4670,6 +4672,7 @@ function imprimirDocId(id){
   // Orçamentos usam layout redesenhado
   if(d.tipo==='orc'){
     const w=window.open('','_blank');
+    if(!w){toast('⚠ Pop-up bloqueado. Permita pop-ups para este site e tente novamente.','#ef4444');return;}
     w.document.write('<html><head><meta charset="UTF-8"><title>'+d.num+'</title>'
       +'<style>*{box-sizing:border-box;margin:0;padding:0}body{background:#fff}'
       +'@media print{body{padding:0}}</style>'
@@ -4682,6 +4685,7 @@ function imprimirDocId(id){
   const cor=cfg.corImpressao||'#e65c00';
   const logo=cfg.logo||'';
   const w=window.open('','_blank');
+  if(!w){toast('⚠ Pop-up bloqueado. Permita pop-ups para este site e tente novamente.','#ef4444');return;}
   const logoHtml=logo
     ?'<img src="'+logo+'" style="max-height:48px;max-width:160px;object-fit:contain" alt="logo">'
     :'<div style="font-size:15px;font-weight:900;color:'+cor+'">'+(cfg.nome||'CONSTRUMAX')+'</div>';
@@ -4717,6 +4721,7 @@ function imprimirRecibo(){
   if(!(d.pagamentos||[]).length){toast('⚠ Nenhum pagamento registrado','#f59e0b');return;}
   const cfg=DB.config;const pago=docPago(d);const saldo=docSaldo(d);
   const w=window.open('','_blank');
+  if(!w){toast('⚠ Pop-up bloqueado. Permita pop-ups para este site e tente novamente.','#ef4444');return;}
   w.document.write(`<html><head><meta charset="UTF-8"><title>Recibo ${d.num}</title>
   <style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial,sans-serif;padding:20px;font-size:11px}
   .header{display:flex;justify-content:space-between;border-bottom:2px solid #333;padding-bottom:10px;margin-bottom:12px}
@@ -5040,6 +5045,7 @@ function imprimirEntregaParcial(){
       +'</tr>';
   }).filter(Boolean).join('');
   const w=window.open('','_blank');
+  if(!w){toast('⚠ Pop-up bloqueado. Permita pop-ups para este site e tente novamente.','#ef4444');return;}
   var html='<html><head><meta charset="UTF-8"><title>Entrega '+d.num+'</title>';
   html+='<style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial,sans-serif;padding:16px 20px;font-size:10px;color:#111}';
   html+='.hdr{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid '+cor+';padding-bottom:10px;margin-bottom:12px}';
@@ -5169,6 +5175,7 @@ function imprimirRomaneio(){
   });
   if(!pendentes.length){toast('Sem entregas pendentes para imprimir','#f59e0b');return;}
   const w=window.open('','_blank');
+  if(!w){toast('⚠ Pop-up bloqueado. Permita pop-ups para este site e tente novamente.','#ef4444');return;}
   var html='<html><head><meta charset="UTF-8"><title>Romaneio</title>';
   html+='<style>';
   html+='*{box-sizing:border-box;margin:0;padding:0}';
@@ -5598,6 +5605,7 @@ function imprimirEtiquetas(prods){
   const loja=(cfg.nome||'CONSTRUMAX').toUpperCase();
   const cor=cfg.corImpressao||'#e65c00';
   const w=window.open('','_blank');
+  if(!w){toast('⚠ Pop-up bloqueado. Permita pop-ups para este site e tente novamente.','#ef4444');return;}
   // 105×30mm — em CSS @page e divs
   var html='<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Etiquetas</title>';
   html+='<style>';
@@ -6020,6 +6028,7 @@ function relatorioFornecedor(forId){
   var totalComprado=lista.reduce(function(s,it){return s+it.qtdTotal*it.ultimoCusto;},0);
   // Gera PDF via window.open + print
   var w=window.open('','_blank');
+  if(!w){toast('⚠ Pop-up bloqueado. Permita pop-ups para este site e tente novamente.','#ef4444');return;}
   var html='<html><head><meta charset="UTF-8"><title>Relatório '+f.nome+'</title>';
   html+='<style>'
     +'*{box-sizing:border-box;margin:0;padding:0}'
@@ -7548,6 +7557,7 @@ function imprimirRomaneioNF(id){
   }).filter(function(l){return l.nome;});
   if(!linhas.length){toast('⚠ Nenhum item nesta entrada','#f59e0b');return;}
   const w=window.open('','_blank');
+  if(!w){toast('⚠ Pop-up bloqueado. Permita pop-ups para este site e tente novamente.','#ef4444');return;}
   var html='<html><head><meta charset="UTF-8"><title>Romaneio '+ent.nfnum+'</title>';
   html+='<style>'
     +'*{box-sizing:border-box;margin:0;padding:0}'
@@ -8829,6 +8839,7 @@ function imprimirDRE(){
   const corpo=document.getElementById('dre-corpo');
   if(!corpo||!corpo.innerHTML){toast('⚠ Gere o DRE primeiro','#f59e0b');return;}
   const win=window.open('','_blank');
+  if(!win){toast('⚠ Pop-up bloqueado. Permita pop-ups para este site e tente novamente.','#ef4444');return;}
   win.document.write('<html><head><title>DRE — '+DB.config.nome+'</title>'
     +'<style>body{font-family:sans-serif;padding:20px;color:#111}*{box-sizing:border-box}</style></head><body>'
     +'<h2 style="margin-bottom:4px">'+DB.config.nome+'</h2>'
@@ -9152,6 +9163,7 @@ function imprimirVendasGro(){
     :fim?'Até '+fim.split('-').reverse().join('/'):'Todo o período';
 
   const w=window.open('','_blank');
+  if(!w){toast('⚠ Pop-up bloqueado. Permita pop-ups para este site e tente novamente.','#ef4444');return;}
   var html='<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Vendas '+cd+'</title>';
   html+='<style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial,sans-serif;padding:16px 20px;font-size:10px;color:#111}';
   html+='.header{border-bottom:3px solid '+cor+';padding-bottom:8px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:flex-start}';
@@ -9625,6 +9637,7 @@ function imprimirVendasProdGrosseiro(){
     :fim?'até '+fim.split('-').reverse().join('/'):'Todo o período';
 
   const w=window.open('','_blank');
+  if(!w){toast('⚠ Pop-up bloqueado. Permita pop-ups para este site e tente novamente.','#ef4444');return;}
   var html='<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Vendas '+cd+'</title>';
   html+='<style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial,sans-serif;padding:16px 20px;font-size:10px;color:#111}';
   html+='.header{border-bottom:3px solid '+cor+';padding-bottom:8px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:flex-start}';
@@ -9902,6 +9915,7 @@ function imprimirRelGrosseiro(){
     :ini?'a partir de '+ini.split('-').reverse().join('/')
     :fim?'até '+fim.split('-').reverse().join('/'):'Todos os períodos';
   const w=window.open('','_blank');
+  if(!w){toast('⚠ Pop-up bloqueado. Permita pop-ups para este site e tente novamente.','#ef4444');return;}
   var html='<html><head><meta charset="UTF-8"><title>Relatório '+cd+'</title>';
   html+='<style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial,sans-serif;padding:16px 20px;font-size:10px;color:#111}';
   html+='.header{border-bottom:3px solid '+cor+';padding-bottom:8px;margin-bottom:12px;display:flex;justify-content:space-between}';
@@ -10319,6 +10333,7 @@ function imprimirInadimplencia(){
     .sort((a,b)=>new Date(a.dtISO||'2000')-new Date(b.dtISO||'2000'));
   const totalInadim=inadim.reduce((s,d)=>s+docSaldo(d),0);
   const w=window.open('','_blank');
+  if(!w){toast('⚠ Pop-up bloqueado. Permita pop-ups para este site e tente novamente.','#ef4444');return;}
   w.document.write(`<html><head><meta charset="UTF-8"><title>Inadimplência</title>
   <style>body{font-family:Arial,sans-serif;padding:20px;font-size:10px}
   h2{font-size:15px}h3{color:#c00;font-size:12px;margin:4px 0}
@@ -10380,6 +10395,7 @@ function imprimirDevolucao(id){
     ?'<img src="'+logo+'" style="max-height:44px;max-width:150px;object-fit:contain">'
     :'<div style="font-size:15px;font-weight:900;color:'+cor+'">'+(cfg.nome||'CONSTRUMAX')+'</div>';
   const w=window.open('','_blank');
+  if(!w){toast('⚠ Pop-up bloqueado. Permita pop-ups para este site e tente novamente.','#ef4444');return;}
   const itens=dev.itens||[];
   const rows=itens.map(it=>'<tr>'
     +'<td style="font-weight:600">'+it.nome+'</td>'
