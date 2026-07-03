@@ -4031,6 +4031,7 @@ function salvarDoc(){
       const cliAtual=DB.clientes.find(c=>c.id===cliId);
       if(cliAtual&&cliAtual.endEntrega!==endDigitado){
         cliAtual.endEntrega=endDigitado;
+        markDirty('clientes');
       }
     }
     // Dados de entrega
@@ -4080,7 +4081,7 @@ function salvarDoc(){
     // Salva pedido individualmente no Firestore
     salvarRegistro('pedidos',doc.id,doc);
     limparRascunho(tipo);
-    saveDB();closeMD('doc');
+    markDirty('pedidos');if(!isOrc)markDirty('produtos');saveDB();closeMD('doc');
     if(btnSalvar){btnSalvar.disabled=false;btnSalvar.textContent='Salvar';}
     if(isOrc)renderOrcamentos();else renderPedidos();
     const pagMsg=!isOrc&&doc.pagamentos.length?' -- Pago: '+fmt(docPago(doc)):'';
@@ -4235,16 +4236,17 @@ function mudaStatus(id,st){
   const d=DB.pedidos.find(x=>x.id===id);if(!d)return;
   const old=d.st;
   if(d.tipo==='orc'){d.st=st;if(d)salvarRegistro('pedidos',d.id,d);
-  saveDB();renderOrcamentos();return;}
-  if(st==='cancelado'&&old!=='cancelado')restaurarEstoque(d);
-  if(old==='cancelado'&&st!=='cancelado')baixarEstoque(d);
+  markDirty('pedidos');saveDB();renderOrcamentos();return;}
+  let estoqueMudou=false;
+  if(st==='cancelado'&&old!=='cancelado'){restaurarEstoque(d);estoqueMudou=true;}
+  if(old==='cancelado'&&st!=='cancelado'){baixarEstoque(d);estoqueMudou=true;}
   d.st=st;
   // Se marcou como entregue via entrega, registra data
   if(st==='entregue'&&d.entrega){
     d.entrega.st='entregue';
     d.entrega.dtEntregue=dtHtml();
   }
-  saveDB();renderPedidos();
+  markDirty('pedidos');if(estoqueMudou)markDirty('produtos');saveDB();renderPedidos();
   if(document.getElementById('pg-entregas').classList.contains('active'))renderEntregas();
   if(curPg==='dashboard')renderDash();
   toast('Status → '+(SC[st]?.l||st));
@@ -4337,7 +4339,7 @@ function salvarEntregaVer(id){
   const obs=document.getElementById('mver-ent-obs')?.value?.trim()||'';
   d.entrega={dtPrevista:dt,end,st,obs,dtEntregue:'',parciais:[]};
   if(d)salvarRegistro('pedidos',d.id,d);
-  saveDB();renderEntregaVer(d);renderEntregas();renderPedidos();
+  markDirty('pedidos');saveDB();renderEntregaVer(d);renderEntregas();renderPedidos();
   toast('✓ Entrega adicionada ao '+d.num,'#10b981');
 }
 function editarEntregaVer(id){
@@ -4423,7 +4425,7 @@ function abrirEditarDesconto(){
   d.total=novoTotal;
   d.lucro=novoLucro;
   if(d)salvarRegistro('pedidos',d.id,d);
-  saveDB();
+  markDirty('pedidos');saveDB();
   verDoc(docIdSelecionado); // atualiza o modal
   renderPedidos();
   renderDash();
@@ -5145,7 +5147,7 @@ function confirmarEntregaParcial(){
     toast('📦 Entrega parcial registrada — '+pct+'% entregue','#a78bfa');
   }
   if(d)salvarRegistro('pedidos',d.id,d);
-  saveDB();closeMD('entrega-parcial');renderEntregas();renderPedidos();
+  markDirty('pedidos');saveDB();closeMD('entrega-parcial');renderEntregas();renderPedidos();
 }
 function confirmarEntrega(id){
   if(!confirm('Confirmar entrega realizada?'))return;
@@ -5154,7 +5156,7 @@ function confirmarEntrega(id){
   d.entrega.dtEntregue=dtHtml();
   d.st='entregue';
   if(d)salvarRegistro('pedidos',d.id,d);
-  saveDB();renderEntregas();renderPedidos();toast('\u2713 Entrega confirmada!');
+  markDirty('pedidos');saveDB();renderEntregas();renderPedidos();toast('\u2713 Entrega confirmada!');
 }
 function imprimirRomaneio(){
   const q=(document.getElementById('src-entrega')?.value||'').toLowerCase();
