@@ -2315,14 +2315,26 @@ function renderLogViewer(){
 function markDirty(colecao){
   if(!window._cmxDirty)window._cmxDirty={};
   if(colecao==='pedidos'){
-    // Marca apenas o mês atual (pedidos novos/editados são sempre do mês corrente)
-    if(!window._cmxDirty.pedidosMeses)window._cmxDirty.pedidosMeses=[];
-    var mesAtual=getPedidosDocKey(new Date().toISOString());
-    if(window._cmxDirty.pedidosMeses.indexOf(mesAtual)<0)
-      window._cmxDirty.pedidosMeses.push(mesAtual);
+    // Marca a coleção inteira como suja — a detecção de QUAL mês mudou
+    // é feita por hash em salvarNaNuvem (evita bug de marcar o mês errado
+    // quando se edita um pedido de um mês diferente do atual)
+    window._cmxDirty.pedidos=true;
   } else {
     window._cmxDirty[colecao]=true;
   }
+}
+// Calcula e guarda o hash de cada mês de pedidos — usado para saber quais
+// meses já estão sincronizados e evitar reenviar tudo a cada save
+function inicializarHashesPedidos(){
+  var porMes={};
+  (DB.pedidos||[]).forEach(function(p){
+    var k=getPedidosDocKey(p.dtISO||p.dt||'');
+    if(!porMes[k])porMes[k]=[];
+    porMes[k].push(p);
+  });
+  Object.keys(porMes).forEach(function(k){
+    window._lastHashes['ped_'+k]=quickHash(JSON.stringify(porMes[k]));
+  });
 }
 
 var _localTimer=null; // debounce do localStorage
@@ -2459,11 +2471,16 @@ function salvarNaNuvem(ts){
       if(h!==(window._lastHashes['prod_'+idx]||'')) writes.push({ref:col.doc(key),data:{ts:timestamp,produtos:JSON.stringify(chunk)},name:key,hash:'prod_'+idx,hashVal:h,mergeFields:['produtos']});
     }
   }
-  // pedidos (com merge por ID)
-  var dirtyMonths=dirty.pedidosMeses||[];
-  dirtyMonths.forEach(function(k){
-    if(pedsByQ[k]) writes.push({ref:col.doc(k),data:{ts:timestamp,pedidos:JSON.stringify(pedsByQ[k])},name:k,mergeFields:['pedidos']});
-  });
+  // pedidos (verifica TODOS os meses por hash — evita bug de marcar o mês errado)
+  if(dirty.all||dirty.pedidos){
+    Object.keys(pedsByQ).forEach(function(k){
+      var pedStr=JSON.stringify(pedsByQ[k]);
+      var h=quickHash(pedStr);
+      if(h!==(window._lastHashes['ped_'+k]||'')){
+        writes.push({ref:col.doc(k),data:{ts:timestamp,pedidos:pedStr},name:k,mergeFields:['pedidos'],hash:'ped_'+k,hashVal:h});
+      }
+    });
+  }
   // Se só meta (nada mudou), cancela
   if(writes.length<=1){
     _nuvemSaving=false;_firebaseSavePending=false;showSI('saved');return;
@@ -2533,6 +2550,10 @@ function salvarNaNuvem(ts){
       for(var _i=0;_i<Math.ceil(_pc.length/2000)||1;_i++){
         window._lastHashes['prod_'+_i]=quickHash(JSON.stringify(_pc.slice(_i*2000,(_i+1)*2000)));
       }
+      // Atualiza hash de cada mês de pedidos que acabou de ser escrito
+      writes.forEach(function(w){
+        if(w.hash&&w.hash.indexOf('ped_')===0) window._lastHashes[w.hash]=w.hashVal;
+      });
       _firebaseSavePending=false;_nuvemSaving=false;
       showSI('saved');
       cmxLog('FIREBASE','Salvo',''+writes.length+' doc(s), '+peds.length+' pedidos');
@@ -4220,8 +4241,13 @@ function registrarPagamento(){
 function delPagamento(id,idx){
   const d=DB.pedidos.find(x=>x.id===id);if(!d)return;
   d.pagamentos.splice(idx,1);
+  // Se o pedido estava marcado como pago e agora tem saldo devedor, reabre o status
+  if(docSaldo(d)>0){
+    if(d.st==='pago')d.st='em-aberto';
+    else if(d.st==='mesclado-pago')d.st='mesclado-aberto';
+  }
   salvarRegistro('pedidos',d.id,d);
-  saveDB();renderPagsModal(d);renderPedidos();toast('Pagamento removido','#ef4444');
+  markDirty('pedidos');saveDB();renderPagsModal(d);renderPedidos();toast('Pagamento removido','#ef4444');
 }
 function deletarDocAtual(){
   if(!docIdSelecionado)return;
@@ -12472,6 +12498,7 @@ function iniciarAutoBackup(){
           for(var _i=0;_i<Math.ceil(_pc.length/2000)||1;_i++){
             window._lastHashes['prod_'+_i]=quickHash(JSON.stringify(_pc.slice(_i*2000,(_i+1)*2000)));
           }
+          inicializarHashesPedidos();
           go(curPg||'dashboard');
           cmxLog('SYNC','Dados atualizados do Firebase',''+DB.pedidos.length+' pedidos');
           toast('🔄 Dados atualizados','#10b981');
@@ -12619,6 +12646,7 @@ window.auth.onAuthStateChanged(function(user){
             for(var _i=0;_i<Math.ceil(_pc.length/2000)||1;_i++){
               window._lastHashes['prod_'+_i]=quickHash(JSON.stringify(_pc.slice(_i*2000,(_i+1)*2000)));
             }
+            inicializarHashesPedidos();
           }catch(e){}
         }catch(e){
           console.warn('Erro ao montar DB da nuvem:',e);
@@ -12645,6 +12673,7 @@ window.auth.onAuthStateChanged(function(user){
           for(var _j=0;_j<Math.ceil(_pc2.length/2000)||1;_j++){
             window._lastHashes['prod_'+_j]=quickHash(JSON.stringify(_pc2.slice(_j*2000,(_j+1)*2000)));
           }
+          inicializarHashesPedidos();
         }catch(e){}
         cmxLog('SYNC','Local mais recente — hashes sincronizados','');
       } else {
