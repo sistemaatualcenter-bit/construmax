@@ -2312,6 +2312,12 @@ function renderLogViewer(){
   +'</div>';
 }
 
+// Filtra registros soft-deleted (_excluido) — usado em todas as listagens.
+// Exclusão soft (marcar _excluido:true em vez de remover) é essencial para
+// sincronização correta entre dispositivos: uma remoção "dura" pode ser
+// "ressuscitada" quando outro dispositivo mescla seus dados antigos.
+function semExcluidos(arr){return(arr||[]).filter(function(r){return!r._excluido;});}
+
 function markDirty(colecao){
   if(!window._cmxDirty)window._cmxDirty={};
   if(colecao==='pedidos'){
@@ -2660,7 +2666,7 @@ const SC={
 function tg(t,b,c){return`<span class="tag" style="background:${b}20;color:${c};border:1px solid ${b}40">${t}</span>`;}
 function tgSt(s){const x=SC[s]||SC.orcamento;return tg(x.l,x.c,x.c);}
 // Pedido/ORC "ativo" = não cancelado, não mesclado, não convertido
-function isAtivo(d){return!['cancelado','mesclado','mesclado-aberto','mesclado-pago','convertido'].includes(d.st);}
+function isAtivo(d){return!d._excluido&&!['cancelado','mesclado','mesclado-aberto','mesclado-pago','convertido'].includes(d.st);}
 function isPedPago(d){return['pago','entregue','mesclado-pago'].includes(d.st)||docSaldo(d)<=0;}
 function stParaEntrega(d){return d.st==='para-entrega';}
 // Normaliza status legados de dados antigos
@@ -3014,7 +3020,7 @@ function renderDash(){
     else if(fim){recLabel='Recebido até '+fmtDt(fim);recSub='Até esta data';}
   }
 
-  const low=DB.produtos.filter(p=>p.est<=p.estMin);
+  const low=semExcluidos(DB.produtos).filter(p=>p.est<=p.estMin);
   const ab=document.getElementById('ab-stock');
   // Separa produtos que têm similar disponível
   const lowSemSimilar=low.filter(p=>!temSimilarComEstoque(p.id));
@@ -3205,7 +3211,7 @@ function renderDash(){
   if(typeof renderTarefas==='function') renderTarefas();
 }
 function impCrit(){
-  const low=DB.produtos.filter(p=>p.est<=p.estMin);
+  const low=semExcluidos(DB.produtos).filter(p=>p.est<=p.estMin);
   if(!low.length){toast('Sem itens críticos','#f59e0b');return;}
   const cfg=DB.config;
   const w=window.open('','_blank');
@@ -3228,7 +3234,7 @@ function renderClientes(resetPage){
   const q=(document.getElementById('src-cli')?.value||'').toLowerCase();
   // Ordena: clientes com pedidos recentes primeiro, depois alfabético
   // Isso garante que novos clientes aparecem quando buscados pelo nome
-  const list=DB.clientes
+  const list=semExcluidos(DB.clientes)
     .filter(c=>c.nome.toLowerCase().includes(q)||(c.cpf||'').includes(q)||(c.tel||'').includes(q))
     .slice()
     .sort((a,b)=>a.nome.localeCompare(b.nome,'pt-BR'));
@@ -3451,7 +3457,7 @@ function delCliente(id){
   } else {
     if(!confirm('Remover cliente?'))return;
   }
-  DB.clientes=DB.clientes.filter(c=>c.id!==id);
+  DB.clientes=DB.clientes.map(c=>c.id===id?Object.assign({},c,{_excluido:true}):c);
   deletarRegistro('clientes',id);
   markDirty('clientes');saveDB();renderClientes();toast('Cliente removido','#ef4444');
 }
@@ -3823,7 +3829,7 @@ function filtProdDoc(){
   const drop=document.getElementById('mdoc-prd-drop');
   const src=document.getElementById('mdoc-prd-src');
   if(!q){drop.style.display='none';return;}
-  const todos=DB.produtos.filter(p=>p.nome.toLowerCase().includes(q)||(p.barras||'').includes(q)||(p.cod||'').toLowerCase().includes(q));
+  const todos=semExcluidos(DB.produtos).filter(p=>p.nome.toLowerCase().includes(q)||(p.barras||'').includes(q)||(p.cod||'').toLowerCase().includes(q));
   const res=todos.slice(0,50);
   if(!res.length){drop.style.display='none';return;}
   drop.style.display='block';
@@ -4254,7 +4260,7 @@ function deletarDocAtual(){
   if(!confirm('Excluir?'))return;
   const d=DB.pedidos.find(x=>x.id===docIdSelecionado);
   if(d&&d.tipo==='ped'&&isAtivo(d))restaurarEstoque(d);
-  DB.pedidos=DB.pedidos.filter(p=>p.id!==docIdSelecionado);
+  DB.pedidos=DB.pedidos.map(p=>p.id===docIdSelecionado?Object.assign({},p,{_excluido:true}):p);
   deletarRegistro('pedidos',docIdSelecionado);
   markDirty('pedidos');saveDB();closeMD('ver');renderPedidos();renderOrcamentos();toast('Excluído','#ef4444');
 }
@@ -4952,7 +4958,7 @@ function delDoc(id){
   if(!confirm('Excluir?'))return;
   const d=DB.pedidos.find(x=>x.id===id);
   if(d&&d.tipo==='ped'&&isAtivo(d))restaurarEstoque(d);
-  DB.pedidos=DB.pedidos.filter(p=>p.id!==id);
+  DB.pedidos=DB.pedidos.map(p=>p.id===id?Object.assign({},p,{_excluido:true}):p);
   markDirty('pedidos');saveDB();renderPedidos();renderOrcamentos();toast('Excluído','#ef4444');
 }
 
@@ -5428,7 +5434,7 @@ function renderProdutos(){
   const cat=document.getElementById('fil-cat')?.value||'';
   // Reset showAll se usuário digitou algo
   if(q||cat)_showAllPrd=false;
-  const total=DB.produtos.length;
+  const total=semExcluidos(DB.produtos).length;
   document.getElementById('prd-cnt').textContent='('+total+')';
   if(!q&&!cat&&!_showAllPrd){
     document.getElementById('prd-tbody').innerHTML=`<tr><td colspan="9" style="text-align:center;padding:32px;color:var(--mt);font-size:13px">
@@ -5437,7 +5443,7 @@ function renderProdutos(){
     </td></tr>`;
     return;
   }
-  const list=DB.produtos.filter(p=>{
+  const list=semExcluidos(DB.produtos).filter(p=>{
     const mq=!q||p.nome.toLowerCase().includes(q)||(p.barras||'').includes(q)||(p.cod||'').toLowerCase().includes(q);
     return mq&&(!cat||p.cat===cat);
   });
@@ -5600,7 +5606,7 @@ function delProduto(id){
     toast('⚠ Produto está em '+pedComProd.length+' pedido(s) ativo(s). Não é possível excluir.','#ef4444');
     return;
   }
-  if(!confirm('Remover produto?'))return;DB.produtos=DB.produtos.filter(p=>p.id!==id);deletarRegistro('produtos',id);markDirty('produtos');saveDB();renderProdutos();toast('Removido','#ef4444');}
+  if(!confirm('Remover produto?'))return;DB.produtos=DB.produtos.map(p=>p.id===id?Object.assign({},p,{_excluido:true}):p);deletarRegistro('produtos',id);markDirty('produtos');saveDB();renderProdutos();toast('Removido','#ef4444');}
 
 // ═══════════════════════════════════════════════════════
 // ESTOQUE
@@ -5682,8 +5688,8 @@ function renderEstoque(){
   const cat=document.getElementById('fil-est-cat')?.value||'';
   const sit=document.getElementById('fil-est-sit')?.value||'';
   const getSit=p=>{const r=p.est/Math.max(1,p.estMin);return r<=1?'critico':r<=1.5?'baixo':'ok';};
-  const low=DB.produtos.filter(p=>p.est<=p.estMin).length;
-  const total=DB.produtos.length;
+  const low=semExcluidos(DB.produtos).filter(p=>p.est<=p.estMin).length;
+  const total=semExcluidos(DB.produtos).length;
   document.getElementById('est-hdr').innerHTML=`<div style="background:${low?'#7f1d1d20':'#14532d20'};border:1px solid ${low?'#7f1d1d60':'#14532d60'};border-radius:9px;padding:8px 14px;font-size:12.5px;color:${low?'#fca5a5':'#86efac'};font-weight:700">${low?'⚠ '+low+' crítico(s)':'✓ Estoque OK'}</div>`;
   if(q||cat||sit)_showAllEst=false;
   // Só renderiza se houver pesquisa, filtro ativo ou flag showAll
@@ -5694,7 +5700,7 @@ function renderEstoque(){
     </td></tr>`;
     return;
   }
-  const list=DB.produtos.filter(p=>{
+  const list=semExcluidos(DB.produtos).filter(p=>{
     const mq=!q||p.nome.toLowerCase().includes(q)||(p.barras||'').includes(q);
     return mq&&(!cat||p.cat===cat)&&(!sit||getSit(p)===sit);
   }).sort((a,b)=>(a.est/Math.max(1,a.estMin))-(b.est/Math.max(1,b.estMin)));
@@ -5952,8 +5958,8 @@ function executarInventario(){
 }
 function renderFornecedores(){
   const q=(document.getElementById('src-for')?.value||'').toLowerCase();
-  const list=DB.fornecedores.filter(f=>f.nome.toLowerCase().includes(q)||(f.cnpj||'').includes(q));
-  document.getElementById('for-cnt').textContent='('+DB.fornecedores.length+')';
+  const list=semExcluidos(DB.fornecedores).filter(f=>f.nome.toLowerCase().includes(q)||(f.cnpj||'').includes(q));
+  document.getElementById('for-cnt').textContent='('+semExcluidos(DB.fornecedores).length+')';
   // Calcula stats de entradas por fornecedor
   function statsFor(forid){
     const ents=DB.entradas.filter(e=>e.forid===forid);
@@ -6149,7 +6155,7 @@ function delFornecedor(id){
     if(!confirm('Fornecedor tem '+entradas.length+' entrada(s) registrada(s). Excluir mesmo assim?'))return;
   } else {
     if(!confirm('Remover?'))return;
-  }DB.fornecedores=DB.fornecedores.filter(f=>f.id!==id);deletarRegistro('fornecedores',id);
+  }DB.fornecedores=DB.fornecedores.map(f=>f.id===id?Object.assign({},f,{_excluido:true}):f);deletarRegistro('fornecedores',id);
   markDirty('op');saveDB();renderFornecedores();toast('Removido','#ef4444');}
 
 // ═══════════════════════════════════════════════════════
@@ -6241,7 +6247,7 @@ function delParceiro(id){
   const p=DB.parceiros.find(x=>x.id===id);
   const temClientes=(DB.clientes||[]).filter(c=>(c.indicadores||[]).includes(id)).length;
   if(temClientes&&!confirm(`Este parceiro tem ${temClientes} cliente(s) indicado(s).\nAo remover, os clientes perderão o vínculo.\n\nDeseja continuar?`))return;
-  DB.parceiros=DB.parceiros.filter(p=>p.id!==id);
+  DB.parceiros=DB.parceiros.map(p=>p.id===id?Object.assign({},p,{_excluido:true}):p);
   // Remove vínculo dos clientes
   DB.clientes=DB.clientes.map(c=>({...c,indicadores:(c.indicadores||[]).filter(i=>i!==id)}));
   deletarRegistro('parceiros',id);
@@ -6364,7 +6370,7 @@ function renderParceiros(){
   const ini=document.getElementById('par-rel-ini')?.value||'';
   const fim=document.getElementById('par-rel-fim')?.value||'';
 
-  const lista=DB.parceiros.filter(function(p){
+  const lista=semExcluidos(DB.parceiros).filter(function(p){
     if(filTipo&&p.tipo!==filTipo)return false;
     if(q&&!p.nome.toLowerCase().includes(q)&&!(p.tipo||'').toLowerCase().includes(q))return false;
     return true;
@@ -6495,7 +6501,7 @@ function renderContasPagar(){
   const hoje=new Date();hoje.setHours(0,0,0,0);
   const em7=new Date(hoje);em7.setDate(em7.getDate()+7);
 
-  const lista=DB.boletos.filter(function(b){
+  const lista=semExcluidos(DB.boletos).filter(function(b){
     if(fil==='aberto'&&b.pago)return false;
     if(fil==='pago'&&!b.pago)return false;
     if(q&&!(b.num||'').toLowerCase().includes(q)&&!(b.forNome||'').toLowerCase().includes(q)&&!(b.nf||'').toLowerCase().includes(q))return false;
@@ -6623,7 +6629,7 @@ if(_bd)salvarRegistro('boletos',_bd.id,_bd);
 }
 function delBoleto(id){
   if(!confirm('Remover este boleto?'))return;
-  DB.boletos=DB.boletos.filter(b=>b.id!==id);
+  DB.boletos=DB.boletos.map(b=>b.id===id?Object.assign({},b,{_excluido:true}):b);
   deletarRegistro('boletos',id);
   markDirty('fin');saveDB();renderContasPagar();toast('Boleto removido','#ef4444');
 }
@@ -7547,7 +7553,7 @@ function confirmarImportXML(){
 }
 function renderEntradas(){
   const q=(document.getElementById('src-ent')?.value||'').toLowerCase();
-  const list=DB.entradas.filter(e=>(e.nfnum||'').toLowerCase().includes(q)||(e.forNome||'').toLowerCase().includes(q)).slice().reverse();
+  const list=semExcluidos(DB.entradas).filter(e=>(e.nfnum||'').toLowerCase().includes(q)||(e.forNome||'').toLowerCase().includes(q)).slice().reverse();
   document.getElementById('ent-tbody').innerHTML=list.length?list.map(e=>`
     <tr>
       <td style="color:var(--or);font-weight:700">${e.nfnum}</td>
@@ -7716,7 +7722,7 @@ function filtProdEnt(){
     return;
   }
   // Busca por nome (não barras parcial)
-  const todosPrd=DB.produtos.filter(p=>p.nome.toLowerCase().includes(ql)||(p.cod||'').toLowerCase().includes(ql));
+  const todosPrd=semExcluidos(DB.produtos).filter(p=>p.nome.toLowerCase().includes(ql)||(p.cod||'').toLowerCase().includes(ql));
   const res=todosPrd.slice(0,50);
   drop.style.display='block';
   let html='';
@@ -7892,7 +7898,7 @@ function salvarEntrada(){
   nfItens=[];
   markDirty('op');markDirty('produtos');saveDB();closeMD('ent');renderEntradas();renderEstoque();
 }
-function delEntrada(id){if(!confirm('Remover?'))return;DB.entradas=DB.entradas.filter(e=>e.id!==id);deletarRegistro('entradas',id);
+function delEntrada(id){if(!confirm('Remover?'))return;DB.entradas=DB.entradas.map(e=>e.id===id?Object.assign({},e,{_excluido:true}):e);deletarRegistro('entradas',id);
   markDirty('op');saveDB();renderEntradas();toast('Removida','#ef4444');}
 
 // ═══════════════════════════════════════════════════════
@@ -8244,7 +8250,7 @@ function pagarDespesa(id){
 }
 function delDespesa(id){
   if(!confirm('Remover esta despesa?'))return;
-  DB.despesas=DB.despesas.filter(function(d){return d.id!==id;});
+  DB.despesas=DB.despesas.map(function(d){return d.id===id?Object.assign({},d,{_excluido:true}):d;});
   deletarRegistro('despesas',id);
   markDirty('fin');saveDB();renderDespesas();toast('Despesa removida','#ef4444');
 }
@@ -8253,7 +8259,7 @@ function renderDespesas(){
   const filTipo=document.getElementById('desp-fil-tipo')?.value||'';
   const filSt=document.getElementById('desp-fil-st')?.value||'';
   const hoje=new Date();hoje.setHours(0,0,0,0);
-  const lista=DB.despesas.filter(function(d){
+  const lista=semExcluidos(DB.despesas).filter(function(d){
     if(filTipo&&d.tipo!==filTipo)return false;
     if(filSt==='pago'&&!d.pago)return false;
     if(filSt==='aberto'&&d.pago)return false;
@@ -10304,7 +10310,7 @@ function renderRelatorios(){
   const estBody=document.getElementById('colapso-est-body');
   const totalEstValor=DB.produtos.reduce((s,p)=>s+(p.est*p.custo),0);
   if(estBody&&estBody.style.display!=='none'){
-  document.getElementById('rel-est-tbody').innerHTML=DB.produtos.filter(p=>!catFil||p.cat===catFil).sort((a,b)=>b.est*b.custo-a.est*a.custo).map(p=>{
+  document.getElementById('rel-est-tbody').innerHTML=semExcluidos(DB.produtos).filter(p=>!catFil||p.cat===catFil).sort((a,b)=>b.est*b.custo-a.est*a.custo).map(p=>{
     const val=p.est*p.custo;const pct=totalEstValor>0?(val/totalEstValor*100):0;
     const r=p.est/Math.max(1,p.estMin);
     const s=r<=1?{l:'⚠ Crítico',b:'#ef4444',c:'#fca5a5'}:r<=1.5?{l:'Baixo',b:'#f59e0b',c:'#fde68a'}:{l:'✓ Ok',b:'#10b981',c:'#86efac'};
@@ -10391,11 +10397,11 @@ function imprimirInadimplencia(){
 let devItensQtd={};
 function renderDevolucoes(){
   const q=(document.getElementById('src-dev')?.value||'').toLowerCase();
-  const list=DB.devolucoes.filter(d=>d.cliNome.toLowerCase().includes(q)||d.numDev.toLowerCase().includes(q)||(d.pedNum||'').toLowerCase().includes(q)).slice().reverse();
-  const total=DB.devolucoes.reduce((s,d)=>s+d.valorTotal,0);
-  const aberto=DB.devolucoes.filter(d=>d.creditoStatus==='aberto').reduce((s,d)=>s+d.valorTotal,0);
+  const list=semExcluidos(DB.devolucoes).filter(d=>d.cliNome.toLowerCase().includes(q)||d.numDev.toLowerCase().includes(q)||(d.pedNum||'').toLowerCase().includes(q)).slice().reverse();
+  const total=semExcluidos(DB.devolucoes).reduce((s,d)=>s+d.valorTotal,0);
+  const aberto=semExcluidos(DB.devolucoes).filter(d=>d.creditoStatus==='aberto').reduce((s,d)=>s+d.valorTotal,0);
   document.getElementById('dev-kpis').innerHTML=[
-    {l:'Total Devolvido',v:fmt(total),c:'#ef4444',s:DB.devolucoes.length+' devoluções'},
+    {l:'Total Devolvido',v:fmt(total),c:'#ef4444',s:semExcluidos(DB.devolucoes).length+' devoluções'},
     {l:'Crédito em Aberto',v:fmt(aberto),c:'#f59e0b',s:'A utilizar'},
     {l:'Crédito Utilizado',v:fmt(total-aberto),c:'#10b981',s:'Já descontado'},
   ].map(k=>`<div class="kpi"><div class="kv" style="color:${k.c}">${k.v}</div><div class="kl">${k.l}</div><div class="ks">${k.s}</div></div>`).join('');
@@ -10671,7 +10677,7 @@ function delDevolucao(id){
     if(!confirm('Este crédito já foi aplicado em um pedido. Excluir mesmo assim?'))return;
   } else {
     if(!confirm('Remover?'))return;
-  }DB.devolucoes=DB.devolucoes.filter(d=>d.id!==id);markDirty('op');saveDB();renderDevolucoes();toast('Removida','#ef4444');}
+  }DB.devolucoes=DB.devolucoes.map(d=>d.id===id?Object.assign({},d,{_excluido:true}):d);markDirty('op');saveDB();renderDevolucoes();toast('Removida','#ef4444');}
 
 // ═══════════════════════════════════════════════════════
 // CONFIG
@@ -10706,7 +10712,7 @@ function delFamilia(id){
 function addProdToFam(famId){
   const q=document.getElementById('fam-prd-src-'+famId)?.value?.toLowerCase()?.trim()||'';
   if(!q){toast('⚠ Digite o produto','#f59e0b');return;}
-  const match=DB.produtos.filter(p=>p.nome.toLowerCase().includes(q)||p.cod?.toLowerCase().includes(q));
+  const match=semExcluidos(DB.produtos).filter(p=>p.nome.toLowerCase().includes(q)||p.cod?.toLowerCase().includes(q));
   if(!match.length){toast('⚠ Nenhum produto encontrado','#f59e0b');return;}
   if(match.length>1){
     // Mostra dropdown de seleção
@@ -10815,7 +10821,7 @@ function renderFamPrdDropInput(famId,val){
   if(!drop)return;
   if(!q){drop.style.display='none';return;}
   const fam=DB.familias.find(f=>f.id===famId);
-  const match=DB.produtos.filter(p=>
+  const match=semExcluidos(DB.produtos).filter(p=>
     (p.nome.toLowerCase().includes(q)||(p.cod||'').toLowerCase().includes(q))&&
     !(fam?.pids||[]).includes(p.id)
   ).slice(0,8);
@@ -11347,7 +11353,7 @@ function renderTarefas(){
   const lista=document.getElementById('dash-tarefas-lista');
   const badge=document.getElementById('dash-tarefas-badge');
   if(!lista)return;
-  const pendentes=DB.tarefas.filter(t=>t.st!=='cancelada'&&t.st!=='concluida');
+  const pendentes=semExcluidos(DB.tarefas).filter(t=>t.st!=='cancelada'&&t.st!=='concluida');
   const urgentes=pendentes.filter(t=>t.prio==='urgente').length;
   if(badge){
     if(pendentes.length>0){badge.style.display='inline';badge.textContent=pendentes.length+(urgentes>0?' ('+urgentes+' urgente'+(urgentes>1?'s':'')+')':'');}
@@ -11423,7 +11429,7 @@ function cancelarTarefa(id){
 
 function delTarefa(id){
   if(!confirm('Excluir esta tarefa?'))return;
-  DB.tarefas=DB.tarefas.filter(t=>t.id!==id);
+  DB.tarefas=DB.tarefas.map(t=>t.id===id?Object.assign({},t,{_excluido:true}):t);
   markDirty('op');saveDB();renderTarefas();
 }
 
@@ -11734,7 +11740,7 @@ function filtProdComanda(){
     return;
   }
   // Busca por nome ou código (não barras parcial)
-  const res=DB.produtos.filter(p=>
+  const res=semExcluidos(DB.produtos).filter(p=>
     p.nome.toLowerCase().includes(ql)||
     (p.cod||'').toLowerCase().includes(ql)
   ).slice(0,30);
