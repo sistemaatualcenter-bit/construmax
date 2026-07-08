@@ -960,6 +960,16 @@ select.inp option{background:var(--card2)}
         <option value="aberto">Em Aberto</option>
         <option value="pago">Pagos</option>
       </select>
+      <select class="inp" style="width:170px" id="cp-fil-for" onchange="renderContasPagar()">
+        <option value="">Todos fornecedores</option>
+      </select>
+      <div style="display:flex;align-items:center;gap:4px">
+        <label style="font-size:11px;color:var(--mt);white-space:nowrap">Venc. de</label>
+        <input type="date" class="inp" style="width:135px" id="cp-fil-dt-ini" onchange="renderContasPagar()">
+        <label style="font-size:11px;color:var(--mt)">até</label>
+        <input type="date" class="inp" style="width:135px" id="cp-fil-dt-fim" onchange="renderContasPagar()">
+        <button class="btn bg bsm" onclick="document.getElementById('cp-fil-dt-ini').value='';document.getElementById('cp-fil-dt-fim').value='';renderContasPagar()" title="Limpar período">✕</button>
+      </div>
       <div class="sb2"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg><input placeholder="Buscar boleto..." id="src-cp" oninput="renderContasPagar()"></div>
       <button class="btn bp" onclick="abrirNovoBoleto()">+ Novo Boleto</button>
     </div>
@@ -2380,7 +2390,7 @@ function saveDB(){
       }catch(e2){}
     }
   },500);
-  // Debounce Firebase 8s
+  // Debounce Firebase 3s (reduzido de 8s para diminuir tempo total de espera)
   if(_nuvemTimer) clearTimeout(_nuvemTimer);
   _nuvemTimer=setTimeout(function(){
     _nuvemTimer=null;
@@ -2388,11 +2398,11 @@ function saveDB(){
       _nuvemTimer=setTimeout(function(){
         _nuvemTimer=null;
         salvarNaNuvem(parseInt(localStorage.getItem(KEY+'_ts')||Date.now()));
-      },8000);
+      },3000);
       return;
     }
     salvarNaNuvem(ts);
-  },8000);
+  },3000);
 }
 
 // ── Helper: retorna chave do documento por MÊS (evita limite 1MB do Firestore) ──
@@ -3129,14 +3139,28 @@ function renderDash(){
     const cnt=allDocs.filter(d=>s.keys.includes(d.st)).length;
     return`<div style="background:var(--card2);border-radius:9px;padding:10px;border-left:3px solid ${s.c}"><div style="font-family:'Barlow Condensed',sans-serif;font-size:22px;font-weight:800;color:${s.c}">${cnt}</div><div style="font-size:11px;color:var(--mt);font-weight:600">${s.l}</div></div>`;
   }).join('');
-  document.getElementById('dash-low').innerHTML=(low.length)?[
-    ...lowSemSimilar.map(p=>`<div class="ir"><span style="font-size:12px">${p.nome}</span><div style="display:flex;gap:5px">${tg(p.est+' '+p.un,'#ef4444','#fca5a5')}${tg('Mín:'+p.estMin,'#475569','#94a3b8')}</div></div>`),
-    ...lowComSimilar.map(p=>{
-      const fams=getFamiliasDoProduto(p.id);
-      const similNome=fams.flatMap(f=>f.pids).filter(id=>id!==p.id).map(id=>DB.produtos.find(x=>x.id===id)).filter(p=>p&&p.est>p.estMin).map(p=>p.nome).slice(0,1).join('');
-      return`<div class="ir"><span style="font-size:12px;color:var(--mt)">${p.nome}</span><div style="display:flex;gap:5px">${tg(p.est+' '+p.un,'#f59e0b','#fde68a')}${tg('Similar: '+similNome,'#10b981','#86efac')}</div></div>`;
-    })
-  ].join(''):`<div style="color:var(--gn);font-size:12.5px;padding:6px 0">✓ Estoque normalizado</div>`;
+  document.getElementById('dash-low').innerHTML=(low.length)?(function(){
+    // Dashboard mostra só um RESUMO (top 20 itens mais críticos) — lista completa fica na tela Estoque
+    const LIMITE_DASH=20;
+    const lowSemSimilarOrd=lowSemSimilar.slice().sort((a,b)=>a.est-b.est);
+    const lowComSimilarOrd=lowComSimilar.slice().sort((a,b)=>a.est-b.est);
+    const mostrarSem=lowSemSimilarOrd.slice(0,LIMITE_DASH);
+    const restanteSem=Math.max(0,lowSemSimilarOrd.length-LIMITE_DASH);
+    const mostrarCom=restanteSem>0?[]:lowComSimilarOrd.slice(0,Math.max(0,LIMITE_DASH-mostrarSem.length));
+    const totalOculto=low.length-mostrarSem.length-mostrarCom.length;
+    let html=[
+      ...mostrarSem.map(p=>`<div class="ir"><span style="font-size:12px">${p.nome}</span><div style="display:flex;gap:5px">${tg(p.est+' '+p.un,'#ef4444','#fca5a5')}${tg('Mín:'+p.estMin,'#475569','#94a3b8')}</div></div>`),
+      ...mostrarCom.map(p=>{
+        const fams=getFamiliasDoProduto(p.id);
+        const similNome=fams.flatMap(f=>f.pids).filter(id=>id!==p.id).map(id=>DB.produtos.find(x=>x.id===id)).filter(p=>p&&p.est>p.estMin).map(p=>p.nome).slice(0,1).join('');
+        return`<div class="ir"><span style="font-size:12px;color:var(--mt)">${p.nome}</span><div style="display:flex;gap:5px">${tg(p.est+' '+p.un,'#f59e0b','#fde68a')}${tg('Similar: '+similNome,'#10b981','#86efac')}</div></div>`;
+      })
+    ].join('');
+    if(totalOculto>0){
+      html+=`<div class="ir" style="cursor:pointer;color:var(--or);font-weight:600" onclick="go('estoque')">+ ${totalOculto} outro(s) item(ns) com estoque baixo — ver tela Estoque</div>`;
+    }
+    return html;
+  })():`<div style="color:var(--gn);font-size:12.5px;padding:6px 0">✓ Estoque normalizado</div>`;
   // Ranking de clientes
   const cm={};
   DB.pedidos.filter(d=>d.tipo==='ped'&&isAtivo(d)&&d.cliId&&d.cliId!=='cli-anonimo').forEach(d=>{
@@ -6498,12 +6522,34 @@ function renderContasPagar(){
   if(!DB.boletos)DB.boletos=[];
   const q=(document.getElementById('src-cp')?.value||'').toLowerCase();
   const fil=document.getElementById('cp-fil-st')?.value||'';
+  const filFor=document.getElementById('cp-fil-for')?.value||'';
+  const dtIni=document.getElementById('cp-fil-dt-ini')?.value||'';
+  const dtFim=document.getElementById('cp-fil-dt-fim')?.value||'';
   const hoje=new Date();hoje.setHours(0,0,0,0);
   const em7=new Date(hoje);em7.setDate(em7.getDate()+7);
+
+  // Popula o dropdown de fornecedores (só refaz se a lista mudou de tamanho, evita perder a seleção atual)
+  const selFor=document.getElementById('cp-fil-for');
+  if(selFor&&selFor.dataset.qtd!=String(semExcluidos(DB.fornecedores||[]).length)){
+    const atual=selFor.value;
+    const fornecedoresComBoleto=semExcluidos(DB.fornecedores||[]).filter(f=>DB.boletos.some(b=>b.forId===f.id||(b.forNome||'').toLowerCase().trim()===f.nome.toLowerCase().trim()));
+    selFor.innerHTML='<option value="">Todos fornecedores</option>'+
+      fornecedoresComBoleto.sort((a,b)=>a.nome.localeCompare(b.nome)).map(f=>`<option value="${f.id}">${f.nome}</option>`).join('');
+    selFor.value=atual;
+    selFor.dataset.qtd=String(semExcluidos(DB.fornecedores||[]).length);
+  }
 
   const lista=semExcluidos(DB.boletos).filter(function(b){
     if(fil==='aberto'&&b.pago)return false;
     if(fil==='pago'&&!b.pago)return false;
+    if(filFor){
+      const forSelecionado=(DB.fornecedores||[]).find(f=>f.id===filFor);
+      const bateId=b.forId&&b.forId===filFor;
+      const bateNome=forSelecionado&&(b.forNome||'').toLowerCase().trim()===forSelecionado.nome.toLowerCase().trim();
+      if(!bateId&&!bateNome)return false;
+    }
+    if(dtIni&&(!b.venc||b.venc<dtIni))return false;
+    if(dtFim&&(!b.venc||b.venc>dtFim))return false;
     if(q&&!(b.num||'').toLowerCase().includes(q)&&!(b.forNome||'').toLowerCase().includes(q)&&!(b.nf||'').toLowerCase().includes(q))return false;
     return true;
   }).sort(function(a,b){
@@ -6552,7 +6598,11 @@ function renderContasPagar(){
       <td style="color:var(--mt);font-size:12px">${b.emissao?b.emissao.split('-').reverse().join('/'):'--'}</td>
       <td><div style="font-weight:700">${b.venc?b.venc.split('-').reverse().join('/'):'--'}</div><div>${diasStr}</div></td>
       <td style="font-weight:700;font-size:14px">${fmt(b.valor)}</td>
-      <td style="font-size:11px;color:var(--mt)">${b.obs||''}</td>
+      <td style="font-size:11px;color:var(--mt);max-width:160px">${
+        b.pago&&b.obsPag
+          ?'<div title="Observação do pagamento"><span style="color:#10b981;font-weight:600">💬 '+b.obsPag+'</span></div>'+(b.obs?'<div style="opacity:.7;margin-top:2px">'+b.obs+'</div>':'')
+          :(b.obs||'')
+      }</td>
       <td>${stHtml}</td>
       <td><div style="display:flex;gap:4px">
         ${!b.pago?`<button class="btn bp bsm" onclick="abrirPagBoleto('${b.id}')" style="font-size:11px">💳 Pagar</button>`:''}
@@ -11005,6 +11055,7 @@ function exportBK(label){
       xmlMemoria:DB.xmlMemoria||{},
       config:DB.config||{},
       seq:DB.seq||{ped:1,orc:1,ent:1,dev:1},
+      tarefas:DB.tarefas||[],
     };
   }
   else if(label==='Clientes')obj={clientes:DB.clientes};
@@ -11069,6 +11120,7 @@ function confirImp(){
   if(impPending.parceiros)DB.parceiros=impPending.parceiros;
   if(impPending.campanhas)DB.campanhas=impPending.campanhas;
   if(impPending.xmlMemoria)DB.xmlMemoria=impPending.xmlMemoria;
+  if(impPending.tarefas)DB.tarefas=impPending.tarefas;
   if(impPending.config)DB.config={...DB.config,...impPending.config};
   var ts = Date.now();
   localStorage.setItem(KEY, JSON.stringify(DB));
@@ -11091,6 +11143,7 @@ function apagarTodos(){
   const resp=prompt('Digite APAGAR para confirmar:');
   if(resp!=='APAGAR'){toast('Cancelado');return;}
   DB={clientes:[],produtos:[],pedidos:[],fornecedores:[],entradas:[],devolucoes:[],
+    boletos:[],despesas:[],parceiros:[],campanhas:[],tarefas:[],familias:[],xmlMemoria:{},
     categorias:['Cimento','Alvenaria','Agregados','Aço','Tintas','Cobertura','Elétrico','Hidráulico','Ferramentas','Outros'],
     config:DB.config,seq:{ped:1,orc:1,ent:1,dev:1}};
   saveDB();renderBackup();toast('🗑 Dados apagados','#ef4444');
@@ -12391,6 +12444,10 @@ function baixarBackupAuto(){
 }
 
 function iniciarAutoBackup(){
+  // Flag global evita múltiplos timers/intervalos se a função for chamada mais de uma vez na mesma sessão
+  if(window._backupIntervalAtivo)return;
+  window._backupIntervalAtivo=true;
+
   function salvarSnapshot(){
     // Auto-backup local desativado — DB de 2.8MB excede quota do localStorage
     // O Firebase é o backup principal. Use Backup > Exportar para backup manual.
@@ -12400,15 +12457,11 @@ function iniciarAutoBackup(){
 
   // Download automático a cada 30 minutos
   // Arquivo salvo em C:\Users\User\Downloads com nome backup-construmax-AAAA-MM-DD-HH-MM.json
-  // Flag global evita múltiplos intervalos ao recarregar a página
-  if(!window._backupIntervalAtivo){
-    window._backupIntervalAtivo=true;
-    const INTERVALO_BACKUP=30*60*1000; // 30 minutos
-    setTimeout(function(){
-      baixarBackupAuto();
-      setInterval(baixarBackupAuto, INTERVALO_BACKUP);
-    }, INTERVALO_BACKUP);
-  }
+  const INTERVALO_BACKUP=30*60*1000; // 30 minutos
+  setTimeout(function(){
+    baixarBackupAuto();
+    setInterval(baixarBackupAuto, INTERVALO_BACKUP);
+  }, INTERVALO_BACKUP);
 
   window.addEventListener('beforeunload',function(ev){
     if(_nuvemTimer){clearTimeout(_nuvemTimer);_nuvemTimer=null;}
@@ -12692,6 +12745,7 @@ window.auth.onAuthStateChanged(function(user){
       }
       if(!localLoaded)initApp();
       else{go(curPg||'dashboard');cmxLog('SYNC','Firebase carregado — tela atualizada','');}
+      iniciarAutoBackup(); // garante que o backup automático seja agendado em QUALQUER caminho de login
     }).catch(function(e){
       // Subcoleção não existe — tenta doc legado único
       console.warn('Subcoleção não encontrada, tentando legado:',e);
