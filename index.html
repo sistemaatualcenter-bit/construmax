@@ -6557,20 +6557,20 @@ function renderContasPagar(){
     return(a.venc||'').localeCompare(b.venc||'');
   });
 
-  // KPIs
-  const abertos=DB.boletos.filter(b=>!b.pago);
+  // KPIs — calculados a partir da lista JÁ FILTRADA (fornecedor, período, status, busca)
+  const abertos=lista.filter(b=>!b.pago);
   const totalAberto=abertos.reduce((s,b)=>s+b.valor,0);
   const vencidos=abertos.filter(b=>b.venc&&b.venc<hoje.toISOString().slice(0,10));
   const totalVencido=vencidos.reduce((s,b)=>s+b.valor,0);
   const a7=abertos.filter(b=>b.venc&&b.venc>=hoje.toISOString().slice(0,10)&&new Date(b.venc)<=em7);
   const totalA7=a7.reduce((s,b)=>s+b.valor,0);
-  const totalPago=DB.boletos.filter(b=>b.pago).reduce((s,b)=>s+b.valor,0);
+  const totalPago=lista.filter(b=>b.pago).reduce((s,b)=>s+b.valor,0);
   const kpisEl=document.getElementById('cp-kpis');
   if(kpisEl)kpisEl.innerHTML=[
     {l:'Total a Pagar',v:fmt(totalAberto),c:'#3b82f6',s:abertos.length+' boleto(s)'},
     {l:'Vencidos',v:fmt(totalVencido),c:'#ef4444',s:vencidos.length+' boleto(s)'},
     {l:'Vencem em 7 dias',v:fmt(totalA7),c:'#f59e0b',s:a7.length+' boleto(s)'},
-    {l:'Total Pago',v:fmt(totalPago),c:'#10b981',s:DB.boletos.filter(b=>b.pago).length+' boleto(s)'},
+    {l:'Total Pago',v:fmt(totalPago),c:'#10b981',s:lista.filter(b=>b.pago).length+' boleto(s)'},
   ].map(k=>`<div class="kpi"><div class="kv" style="color:${k.c}">${k.v}</div><div class="kl">${k.l}</div><div class="ks">${k.s}</div></div>`).join('');
 
   const tbody=document.getElementById('cp-tbody');
