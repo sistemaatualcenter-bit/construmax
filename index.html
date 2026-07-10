@@ -2221,6 +2221,9 @@ select.inp option{background:var(--card2)}
 </div>
 
 <div id="si">✓ Salvo</div>
+<div id="sync-bar" style="display:none;position:fixed;top:0;left:0;right:0;background:#92400e;color:#fde68a;text-align:center;padding:8px 12px;font-size:13px;font-weight:700;z-index:9999;box-shadow:0 2px 8px rgba(0,0,0,.3)">
+  ⏳ Salvando dados na nuvem... <span style="font-weight:400">não feche ou recarregue esta aba ainda</span>
+</div>
 <div id="toast"></div>
 
 <script>
@@ -2857,6 +2860,19 @@ let _valoresOcultos=false;
 let _pendingSave=false; // flag: evita que listener sobrescreva dados locais não salvos
 window._cmxDirty={all:true}; // quais coleções precisam ser salvas no Firebase
 let _firebaseSavePending=false; // flag: Firebase ainda não confirmou o save
+// Verifica periodicamente se há dados pendentes de sincronizar e mostra/esconde
+// a barra de aviso no topo — independente de qualquer chamada manual a showSI(),
+// garantindo que o usuário NUNCA feche a aba achando que já terminou quando não terminou.
+(function(){
+  var barraVisivel=false;
+  setInterval(function(){
+    var pendente=!!_firebaseSavePending;
+    if(pendente===barraVisivel)return;
+    barraVisivel=pendente;
+    var bar=document.getElementById('sync-bar');
+    if(bar)bar.style.display=pendente?'block':'none';
+  },300);
+})();
 function toggleOcultarValores(){
   _valoresOcultos=!_valoresOcultos;
   const btn=document.getElementById('btn-ocultar-valores');
@@ -4826,7 +4842,7 @@ function imprimirRecibo(){
 function renderOrcamentos(){
   const q=(document.getElementById('src-orc')?.value||'').toLowerCase();
   const st=document.getElementById('fil-orc-st')?.value||'';
-  const list=DB.pedidos.filter(d=>d.tipo==='orc'&&
+  const list=DB.pedidos.filter(d=>!d._excluido&&d.tipo==='orc'&&
     (d.cliNome.toLowerCase().includes(q)||d.num.toLowerCase().includes(q)||d.obs?.toLowerCase().includes(q))&&(!st||d.st===st)
   ).slice().reverse();
   const listOrcShown=list.slice(0,200);
@@ -4889,11 +4905,11 @@ function renderPedidos(){
     return true;
   };
   const qPrd=(document.getElementById('src-ped-prd')?.value||'').toLowerCase().trim();
-  const list=DB.pedidos.filter(d=>d.tipo==='ped'&&
+  const list=DB.pedidos.filter(d=>!d._excluido&&d.tipo==='ped'&&
     (d.cliNome.toLowerCase().includes(q)||d.num.toLowerCase().includes(q)||d.obs?.toLowerCase().includes(q))&&matchSt(d)&&matchDt(d)&&(!pag||d.pag===pag)&&
     (!qPrd||(d.itens||[]).some(it=>it.nome.toLowerCase().includes(qPrd)))
   ).slice().reverse();
-  document.getElementById('ped-cnt').textContent='('+DB.pedidos.filter(d=>d.tipo==='ped').length+')';
+  document.getElementById('ped-cnt').textContent='('+DB.pedidos.filter(d=>!d._excluido&&d.tipo==='ped').length+')';
   const LIMIT_PED=200;
   const listShown=list.slice(0,LIMIT_PED);
   const pedCnt=document.getElementById('ped-cnt');
@@ -5001,7 +5017,7 @@ function renderEntregas(){
   const fim=document.getElementById('fil-entrega-fim')?.value||'';
   // Todos os pedidos com dados de entrega (para-entrega, ag-autorizacao, entregue)
   const isMescladoSt=d=>['mesclado','mesclado-aberto','mesclado-pago'].includes(d.st);
-  const comEntrega=DB.pedidos.filter(d=>d.tipo==='ped'&&d.entrega&&!isMescladoSt(d)&&
+  const comEntrega=DB.pedidos.filter(d=>!d._excluido&&d.tipo==='ped'&&d.entrega&&!isMescladoSt(d)&&
     (d.cliNome.toLowerCase().includes(q)||d.num.toLowerCase().includes(q)));
   // Filtro por status entrega
   const filtSt=d=>{
@@ -5223,7 +5239,7 @@ function imprimirRomaneio(){
   const hoje=dtHtml();
   const hojeF=hoje.split('-').reverse().join('/');
   const isMescladoSt=d=>['mesclado','mesclado-aberto','mesclado-pago'].includes(d.st);
-  const pendentes=DB.pedidos.filter(d=>d.tipo==='ped'&&d.entrega&&d.entrega.st!=='entregue'&&!isMescladoSt(d)&&
+  const pendentes=DB.pedidos.filter(d=>!d._excluido&&d.tipo==='ped'&&d.entrega&&d.entrega.st!=='entregue'&&!isMescladoSt(d)&&
     (d.cliNome.toLowerCase().includes(q)||d.num.toLowerCase().includes(q))).filter(d=>{
     if(!ini&&!fim)return true;
     const dp=d.entrega?.dtPrevista;if(!dp)return true;
@@ -5379,7 +5395,7 @@ function toggleMesPed(id){
   mesPedsSel.forEach(i=>document.getElementById('mcard-'+i)?.classList.add('selected'));
   document.getElementById('mes-btn').disabled=mesPedsSel.length<2;
   if(mesPedsSel.length>=2){
-    const peds=DB.pedidos.filter(d=>mesPedsSel.includes(d.id));
+    const peds=DB.pedidos.filter(d=>!d._excluido&&mesPedsSel.includes(d.id));
     const total=peds.reduce((s,d)=>s+d.total,0);
     document.getElementById('mes-preview-content').innerHTML=`${peds.length} pedidos · Total: <strong style="color:var(--or)">${fmt(total)}</strong> · Originais: ${peds.map(d=>d.num).join(', ')}`;
     document.getElementById('mes-preview').style.display='block';
@@ -5387,7 +5403,7 @@ function toggleMesPed(id){
 }
 function confirmarMescla(){
   if(mesPedsSel.length<2)return;
-  const peds=DB.pedidos.filter(d=>mesPedsSel.includes(d.id));
+  const peds=DB.pedidos.filter(d=>!d._excluido&&mesPedsSel.includes(d.id));
   const cli=DB.clientes.find(c=>c.id===peds[0].cliId);
   const allItens=[];
   peds.forEach(d=>d.itens.forEach(it=>{
@@ -8792,7 +8808,7 @@ function renderDRE(){
   var totalRecebido=0;
   var cmvRecebido=0;
   DB.pedidos.filter(function(d){
-    return d.tipo==='ped'&&d.st!=='cancelado';
+    return!d._excluido&&d.tipo==='ped'&&d.st!=='cancelado';
   }).forEach(function(d){
     var pagPeriodo=(d.pagamentos||[]).filter(function(p){
       var pdt=(p.dtISO||'').slice(0,10);
@@ -9101,7 +9117,7 @@ function renderVendasGro(){
 
   // Pedidos do período (todos — pagos e em aberto)
   const peds=DB.pedidos.filter(function(d){
-    if(d.tipo!=='ped'||d.st==='cancelado')return false;
+    if(d._excluido||d.tipo!=='ped'||d.st==='cancelado')return false;
     if(ini&&(d.dtISO||'')<ini)return false;
     if(fim&&(d.dtISO||'')>fim+'T23:59:59')return false;
     return true;
@@ -9210,7 +9226,7 @@ function imprimirVendasGro(){
   const fim=document.getElementById('vgro-fim')?.value||'';
 
   const peds=DB.pedidos.filter(function(d){
-    if(d.tipo!=='ped'||d.st==='cancelado')return false;
+    if(d._excluido||d.tipo!=='ped'||d.st==='cancelado')return false;
     if(ini&&(d.dtISO||'')<ini)return false;
     if(fim&&(d.dtISO||'')>fim+'T23:59:59')return false;
     return true;
@@ -9569,7 +9585,7 @@ function renderVendasProdGrosseiro(){
 
   // Filtra pedidos do período (todos, não só pagos)
   const peds=DB.pedidos.filter(function(d){
-    if(d.tipo!=='ped'||d.st==='cancelado')return false;
+    if(d._excluido||d.tipo!=='ped'||d.st==='cancelado')return false;
     if(ini&&(d.dtISO||'')<ini)return false;
     if(fim&&(d.dtISO||'')>fim+'T23:59:59')return false;
     return true;
@@ -9674,7 +9690,7 @@ function imprimirVendasProdGrosseiro(){
   const ord=document.getElementById('rel-vpg-ord')?.value||'fat-desc';
 
   const peds=DB.pedidos.filter(function(d){
-    if(d.tipo!=='ped'||d.st==='cancelado')return false;
+    if(d._excluido||d.tipo!=='ped'||d.st==='cancelado')return false;
     if(ini&&(d.dtISO||'')<ini)return false;
     if(fim&&(d.dtISO||'')>fim+'T23:59:59')return false;
     return true;
@@ -10670,7 +10686,7 @@ function usarCredito(id){
   // Inclui pedidos mesclados (mesclado-aberto) que também podem ter saldo
   const stAbertos=['em-aberto','faturado','mesclado-aberto'];
   const abertos=DB.pedidos.filter(d=>
-    d.tipo==='ped'&&d.cliId===dev.cliId&&stAbertos.includes(d.st)&&docSaldo(d)>0
+    !d._excluido&&d.tipo==='ped'&&d.cliId===dev.cliId&&stAbertos.includes(d.st)&&docSaldo(d)>0
   ).sort((a,b)=>new Date(a.dtISO)-new Date(b.dtISO));
   if(abertos.length){
     // Mostra pedidos em aberto para escolher
@@ -10984,7 +11000,7 @@ function renderBackup(){
       <div class="bt" style="height:7px"><div class="bf" style="width:${pct}%;background:${bc}"></div></div>
     </div>
     <div style="display:flex;gap:14px;font-size:12px;flex-wrap:wrap">
-      ${[['Clientes',DB.clientes.length,'#f97316'],['Produtos',DB.produtos.length,'#3b82f6'],['Pedidos',DB.pedidos.filter(d=>d.tipo==='ped').length,'#10b981'],['Orçamentos',DB.pedidos.filter(d=>d.tipo==='orc').length,'#f59e0b']].map(([l,v,c])=>`<div style="text-align:center"><div style="font-weight:800;font-size:18px;color:${c};font-family:'Barlow Condensed',sans-serif">${v}</div><div style="color:var(--mt)">${l}</div></div>`).join('')}
+      ${[['Clientes',semExcluidos(DB.clientes).length,'#f97316'],['Produtos',semExcluidos(DB.produtos).length,'#3b82f6'],['Pedidos',DB.pedidos.filter(d=>!d._excluido&&d.tipo==='ped').length,'#10b981'],['Orçamentos',DB.pedidos.filter(d=>!d._excluido&&d.tipo==='orc').length,'#f59e0b']].map(([l,v,c])=>`<div style="text-align:center"><div style="font-weight:800;font-size:18px;color:${c};font-family:'Barlow Condensed',sans-serif">${v}</div><div style="color:var(--mt)">${l}</div></div>`).join('')}
     </div>
   </div>`;
 
