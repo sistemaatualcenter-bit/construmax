@@ -12268,50 +12268,6 @@ function sincronizarNuvem(){
 }
 
 
-// ── Listener em tempo real para sync entre dispositivos ──
-let _syncListener=null;
-let _ultimoTsNuvem=0;
-
-function iniciarListenerSync(){
-  if(!window.db||!window.currentUser)return;
-  if(_syncListener)_syncListener(); // cancela listener anterior
-  const uid=window.currentUser.uid;
-  const metaRef=window.db.collection('lojas').doc(uid).collection('d').doc('meta');
-  _syncListener=metaRef.onSnapshot(function(doc){
-    if(!doc.exists)return;
-    const tsNuvem=doc.data().ts||0;
-    // Ignora se não mudou desde último sync conhecido
-    if(tsNuvem<=_ultimoTsNuvem)return;
-    const tsLocal=parseInt(localStorage.getItem(KEY+'_ts')||'0');
-    // Ignora se a mudança veio de nós mesmos (ts idêntico ao que salvamos)
-    if(tsLocal>0&&tsNuvem===tsLocal)return;
-    _ultimoTsNuvem=tsNuvem;
-    // Puxa dados atualizados da nuvem silenciosamente
-    const col=window.db.collection('lojas').doc(uid).collection('d');
-    Promise.all([col.doc('pedidos1').get(),col.doc('pedidos2').get()])
-      .then(function(results){
-        try{
-          const p1=results[0].exists?JSON.parse(results[0].data().pedidos||'[]'):[];
-          const p2=results[1].exists?JSON.parse(results[1].data().pedidos||'[]'):[];
-          const pedidosNuvem=[...p1,...p2];
-          // NUNCA sobrescreve se a nuvem tiver MENOS pedidos que o local
-          if(pedidosNuvem.length<DB.pedidos.length)return;
-          DB.pedidos=pedidosNuvem;
-          // Atualiza clientes também
-          const metaData=doc.data();
-          if(metaData.clientes)DB.clientes=JSON.parse(metaData.clientes);
-          localStorage.setItem(KEY,JSON.stringify(DB));
-          // Re-renderiza a página atual
-          if(curPg==='dashboard')renderDash();
-          else if(curPg==='pedidos')renderPedidos();
-          else if(curPg==='orcamentos')renderOrcamentos();
-          console.log('[SYNC] '+pedidosNuvem.length+' pedidos recebidos do outro dispositivo');
-        }catch(e){console.warn('[SYNC] Erro ao processar:',e);}
-      });
-  },function(e){console.warn('[SYNC] Listener erro:',e);});
-}
-
-
 function migrarPedidosTrimestrais(){
   if(!window.db||!window.currentUser||window._blockSync)return;
   // Não executa se há save pendente (dados locais podem ser mais recentes)
