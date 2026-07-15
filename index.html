@@ -275,6 +275,28 @@ select.inp option{background:var(--card2)}
     </div>
   </div>
   <div class="card cp" style="margin-top:16px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px">
+      <div class="stl" style="margin-bottom:0">📊 Faturamento</div>
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+        <select class="inp" id="dash-fat-modo" onchange="renderDashFaturamento()" style="font-size:11.5px;padding:5px 8px;width:auto">
+          <option value="mensal">Mês a mês (12 meses)</option>
+          <option value="diario">Dia a dia</option>
+        </select>
+        <select class="inp" id="dash-fat-mes" onchange="renderDashFaturamento()" style="font-size:11.5px;padding:5px 8px;width:auto;display:none"></select>
+        <select class="inp" id="dash-fat-forma" onchange="renderDashFaturamento()" style="font-size:11.5px;padding:5px 8px;width:auto">
+          <option value="">Todas formas de pgto</option>
+          <option value="dinheiro">Dinheiro</option>
+          <option value="pix">Pix</option>
+          <option value="cartão débito">Cartão Débito</option>
+          <option value="cartão crédito">Cartão Crédito</option>
+          <option value="prazo">Prazo</option>
+        </select>
+      </div>
+    </div>
+    <div id="dash-fat-resumo" style="display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap"></div>
+    <div id="dash-fat-chart" style="display:flex;gap:3px;padding:4px 0 8px;align-items:stretch;overflow-x:auto"></div>
+  </div>
+  <div class="card cp" style="margin-top:16px">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
       <div class="stl" style="margin-bottom:0">📋 Contas a Pagar</div>
       <button class="btn bg bsm" onclick="go('contaspagar')" style="font-size:11px">Ver todas →</button>
@@ -3249,6 +3271,124 @@ function renderDash(){
   // Mantém blur se estava ativo
   setTimeout(aplicarBlurValores,0);
   if(typeof renderTarefas==='function') renderTarefas();
+  renderDashFaturamento();
+}
+
+// ── Gráfico de Faturamento (Mês a Mês / Dia a Dia) com comparativos ──
+function renderDashFaturamento(){
+  const modo=document.getElementById('dash-fat-modo')?.value||'mensal';
+  const formaFil=document.getElementById('dash-fat-forma')?.value||'';
+  const selMes=document.getElementById('dash-fat-mes');
+  const cfm=catFilModo||'com';
+
+  const todos=DB.pedidos.filter(d=>d.tipo==='ped'&&isAtivo(d)&&(!formaFil||d.pag===formaFil));
+
+  // Popula o seletor de mês (só visível no modo diário)
+  if(modo==='diario'){
+    selMes.style.display='';
+    const mesesComDados=new Set();
+    todos.forEach(d=>{const dt=d.dtISO||'';if(dt.length>=7)mesesComDados.add(dt.slice(0,7));});
+    const hojeISO=new Date().toISOString().slice(0,7);
+    mesesComDados.add(hojeISO);
+    const mesesOrdenados=Array.from(mesesComDados).sort().reverse();
+    const atual=selMes.value||hojeISO;
+    selMes.innerHTML=mesesOrdenados.map(m=>{
+      const [ano,mes]=m.split('-');
+      const nomesMes=['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
+      const label=nomesMes[parseInt(mes,10)-1]+'/'+ano;
+      return`<option value="${m}">${label}</option>`;
+    }).join('');
+    if(mesesOrdenados.includes(atual))selMes.value=atual;
+  } else {
+    selMes.style.display='none';
+  }
+
+  let periodos=[]; // [{key, label, total, destaque}]
+  let periodoAtual=0, periodoAnterior=0;
+  let labelComparativo='';
+
+  if(modo==='mensal'){
+    const hoje=new Date();
+    const chaves=[];
+    for(let i=11;i>=0;i--){
+      const d=new Date(hoje.getFullYear(),hoje.getMonth()-i,1);
+      chaves.push(d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'));
+    }
+    const nomesMes=['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
+    const porMes={};
+    todos.forEach(d=>{
+      const k=(d.dtISO||'').slice(0,7);
+      if(!k)return;
+      if(!porMes[k])porMes[k]=0;
+      porMes[k]+=docTotalFil(d,cfm);
+    });
+    periodos=chaves.map(k=>{
+      const mesNum=parseInt(k.split('-')[1],10)-1;
+      return{key:k,label:nomesMes[mesNum],total:porMes[k]||0};
+    });
+    periodoAtual=periodos[periodos.length-1].total;
+    periodoAnterior=periodos.length>1?periodos[periodos.length-2].total:0;
+    labelComparativo='mês anterior';
+  } else {
+    const mesRef=selMes.value||new Date().toISOString().slice(0,7);
+    const [ano,mesNum]=mesRef.split('-').map(Number);
+    const diasNoMes=new Date(ano,mesNum,0).getDate();
+    const porDia={};
+    todos.forEach(d=>{
+      const dtISO=d.dtISO||'';
+      if(dtISO.slice(0,7)!==mesRef)return;
+      const dia=parseInt(dtISO.slice(8,10),10);
+      if(!porDia[dia])porDia[dia]=0;
+      porDia[dia]+=docTotalFil(d,cfm);
+    });
+    periodos=[];
+    for(let dia=1;dia<=diasNoMes;dia++){
+      periodos.push({key:String(dia),label:String(dia),total:porDia[dia]||0});
+    }
+    periodoAtual=periodos.reduce((s,p)=>s+p.total,0);
+    // Compara com o mês anterior completo (para dar noção de ritmo, não dia-a-dia solto)
+    const dtMesRef=new Date(ano,mesNum-1,1);
+    const dtMesAnt=new Date(ano,mesNum-2,1);
+    const mesAntKey=dtMesAnt.getFullYear()+'-'+String(dtMesAnt.getMonth()+1).padStart(2,'0');
+    periodoAnterior=todos.filter(d=>(d.dtISO||'').slice(0,7)===mesAntKey).reduce((s,d)=>s+docTotalFil(d,cfm),0);
+    labelComparativo='mês anterior (total)';
+  }
+
+  const maxV=Math.max(...periodos.map(p=>p.total),1);
+  const melhor=periodos.reduce((m,p)=>p.total>m.total?p:m,periodos[0]||{total:0,label:''});
+  const variacao=periodoAnterior>0?((periodoAtual-periodoAnterior)/periodoAnterior*100):(periodoAtual>0?100:0);
+  const subiu=variacao>=0;
+
+  // Resumo (cards de comparativo)
+  document.getElementById('dash-fat-resumo').innerHTML=`
+    <div style="background:var(--card2);border-radius:10px;padding:10px 14px;flex:1;min-width:130px">
+      <div style="font-size:10.5px;color:var(--mt)">${modo==='mensal'?'Mês atual':'Total do mês'}</div>
+      <div style="font-size:18px;font-weight:800;color:var(--tx)">${fmt(periodoAtual)}</div>
+    </div>
+    <div style="background:var(--card2);border-radius:10px;padding:10px 14px;flex:1;min-width:130px">
+      <div style="font-size:10.5px;color:var(--mt)">Comparado ao ${labelComparativo}</div>
+      <div style="font-size:18px;font-weight:800;color:${subiu?'#10b981':'#ef4444'}">${subiu?'▲':'▼'} ${Math.abs(variacao).toFixed(1)}%</div>
+    </div>
+    <div style="background:var(--card2);border-radius:10px;padding:10px 14px;flex:1;min-width:130px">
+      <div style="font-size:10.5px;color:var(--mt)">${modo==='mensal'?'Melhor mês':'Melhor dia'}</div>
+      <div style="font-size:15px;font-weight:800;color:var(--or)">${melhor.label} · ${fmt(melhor.total)}</div>
+    </div>
+  `;
+
+  // Gráfico de barras
+  const chartH=90;
+  document.getElementById('dash-fat-chart').innerHTML=periodos.map((p,i)=>{
+    const barH=p.total>0?Math.max(Math.round((p.total/maxV)*chartH),3):2;
+    const ehMelhor=p.total===melhor.total&&p.total>0;
+    const ehUltimo=modo==='mensal'&&i===periodos.length-1;
+    const cor=ehMelhor?'linear-gradient(180deg,#f97316,#ea580c)':ehUltimo?'#f9731680':p.total>0?'var(--br2)':'var(--br2)';
+    const minW=modo==='diario'?'18px':'32px';
+    return`<div style="flex:1;min-width:${minW};display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:2px;height:${chartH+26}px" title="${p.label}: ${fmt(p.total)}">
+      <div style="font-size:8px;color:${ehMelhor?'#f97316':'var(--mt)'};font-weight:700;line-height:1;white-space:nowrap">${p.total>0&&(ehMelhor||modo==='mensal')?'R$'+Math.round(p.total/1000)+'k':''}</div>
+      <div style="width:100%;height:${barH}px;background:${cor};border-radius:2px 2px 0 0;transition:height .3s;min-height:2px"></div>
+      <div style="font-size:${modo==='diario'?'8px':'9.5px'};color:${ehMelhor?'var(--or)':'var(--mt)'};font-weight:${ehMelhor?'800':'500'};white-space:nowrap">${p.label}</div>
+    </div>`;
+  }).join('');
 }
 function impCrit(){
   const low=semExcluidos(DB.produtos).filter(p=>p.est<=p.estMin);
