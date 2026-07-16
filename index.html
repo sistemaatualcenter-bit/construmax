@@ -293,6 +293,13 @@ select.inp option{background:var(--card2)}
         </select>
       </div>
     </div>
+    <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:10px;font-size:11.5px;color:var(--mt)">
+      <span>Comparar com:</span>
+      <select class="inp" id="dash-fat-comp" onchange="renderDashFaturamento()" style="font-size:11.5px;padding:4px 8px;width:auto"></select>
+      <span>Primeiros</span>
+      <input type="number" id="dash-fat-dias" min="1" max="31" placeholder="auto" onchange="renderDashFaturamento()" style="font-size:11.5px;padding:4px 6px;width:60px;border:1px solid var(--br);border-radius:6px;background:var(--card2);color:var(--tx)">
+      <span>dia(s) de cada período (deixe em branco = automático/justo)</span>
+    </div>
     <div id="dash-fat-resumo" style="display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap"></div>
     <div id="dash-fat-chart" style="display:flex;gap:3px;padding:4px 0 8px;align-items:stretch;overflow-x:auto"></div>
   </div>
@@ -3279,7 +3286,10 @@ function renderDashFaturamento(){
   const modo=document.getElementById('dash-fat-modo')?.value||'mensal';
   const formaFil=document.getElementById('dash-fat-forma')?.value||'';
   const selMes=document.getElementById('dash-fat-mes');
+  const selComp=document.getElementById('dash-fat-comp');
+  const inpDias=document.getElementById('dash-fat-dias');
   const cfm=catFilModo||'com';
+  const nomesMes=['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
 
   const todos=DB.pedidos.filter(d=>d.tipo==='ped'&&isAtivo(d)&&(!formaFil||d.pag===formaFil));
 
@@ -3294,7 +3304,6 @@ function renderDashFaturamento(){
     const atual=selMes.value||hojeISO;
     selMes.innerHTML=mesesOrdenados.map(m=>{
       const [ano,mes]=m.split('-');
-      const nomesMes=['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
       const label=nomesMes[parseInt(mes,10)-1]+'/'+ano;
       return`<option value="${m}">${label}</option>`;
     }).join('');
@@ -3303,9 +3312,7 @@ function renderDashFaturamento(){
     selMes.style.display='none';
   }
 
-  let periodos=[]; // [{key, label, total, destaque}]
-  let periodoAtual=0, periodoAnterior=0;
-  let labelComparativo='';
+  let periodos=[]; // [{key, label, total}] — usado só para desenhar as barras
 
   if(modo==='mensal'){
     const hoje=new Date();
@@ -3314,7 +3321,6 @@ function renderDashFaturamento(){
       const d=new Date(hoje.getFullYear(),hoje.getMonth()-i,1);
       chaves.push(d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'));
     }
-    const nomesMes=['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
     const porMes={};
     todos.forEach(d=>{
       const k=(d.dtISO||'').slice(0,7);
@@ -3326,9 +3332,6 @@ function renderDashFaturamento(){
       const mesNum=parseInt(k.split('-')[1],10)-1;
       return{key:k,label:nomesMes[mesNum],total:porMes[k]||0};
     });
-    periodoAtual=periodos[periodos.length-1].total;
-    periodoAnterior=periodos.length>1?periodos[periodos.length-2].total:0;
-    labelComparativo='mês anterior';
   } else {
     const mesRef=selMes.value||new Date().toISOString().slice(0,7);
     const [ano,mesNum]=mesRef.split('-').map(Number);
@@ -3345,14 +3348,61 @@ function renderDashFaturamento(){
     for(let dia=1;dia<=diasNoMes;dia++){
       periodos.push({key:String(dia),label:String(dia),total:porDia[dia]||0});
     }
-    periodoAtual=periodos.reduce((s,p)=>s+p.total,0);
-    // Compara com o mês anterior completo (para dar noção de ritmo, não dia-a-dia solto)
-    const dtMesRef=new Date(ano,mesNum-1,1);
-    const dtMesAnt=new Date(ano,mesNum-2,1);
-    const mesAntKey=dtMesAnt.getFullYear()+'-'+String(dtMesAnt.getMonth()+1).padStart(2,'0');
-    periodoAnterior=todos.filter(d=>(d.dtISO||'').slice(0,7)===mesAntKey).reduce((s,d)=>s+docTotalFil(d,cfm),0);
-    labelComparativo='mês anterior (total)';
   }
+
+  // ── COMPARATIVO — mês de referência vs mês escolhido, mesmo nº de dias ──
+  const hojeReal=new Date();
+  const mesRefKey=modo==='mensal'
+    ?(hojeReal.getFullYear()+'-'+String(hojeReal.getMonth()+1).padStart(2,'0'))
+    :(selMes.value||hojeReal.getFullYear()+'-'+String(hojeReal.getMonth()+1).padStart(2,'0'));
+  const [anoRef,mesNumRef]=mesRefKey.split('-').map(Number);
+  const diasNoMesRef=new Date(anoRef,mesNumRef,0).getDate();
+  const ehMesRealAtual=mesRefKey===(hojeReal.getFullYear()+'-'+String(hojeReal.getMonth()+1).padStart(2,'0'));
+
+  // Popula o seletor "Comparar com" — últimos 24 meses, excluindo o mês de referência
+  const mesesDisponiveis=[];
+  for(let i=1;i<=24;i++){
+    const d=new Date(anoRef,mesNumRef-1-i,1);
+    mesesDisponiveis.push(d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'));
+  }
+  const compAtualSelecionado=selComp.value;
+  selComp.innerHTML=mesesDisponiveis.map(m=>{
+    const [a,me]=m.split('-');
+    return`<option value="${m}">${nomesMes[parseInt(me,10)-1]}/${a}</option>`;
+  }).join('');
+  // Se nada selecionado ainda, OU se o mês antes selecionado não é mais válido (mudou o mês de referência), usa o mês imediatamente anterior como padrão
+  if(compAtualSelecionado&&mesesDisponiveis.includes(compAtualSelecionado)){
+    selComp.value=compAtualSelecionado;
+  } else {
+    selComp.value=mesesDisponiveis[0];
+  }
+  const mesCompKey=selComp.value;
+  const [anoComp,mesNumComp]=mesCompKey.split('-').map(Number);
+  const diasNoMesComp=new Date(anoComp,mesNumComp,0).getDate();
+
+  // Define quantos dias comparar: campo manual > automático (justo)
+  let diasComparar=parseInt(inpDias.value,10);
+  const diasAutomatico=ehMesRealAtual?hojeReal.getDate():diasNoMesRef;
+  if(!diasComparar||diasComparar<1){
+    diasComparar=diasAutomatico;
+  }
+  // Nunca ultrapassa o menor dos dois meses (evita comparar dia 31 com um mês de 28 dias)
+  diasComparar=Math.min(diasComparar,diasNoMesRef,diasNoMesComp);
+
+  function somaPeriodo(mesKey,ateDia){
+    return todos.filter(d=>{
+      const dtISO=d.dtISO||'';
+      if(dtISO.slice(0,7)!==mesKey)return false;
+      const dia=parseInt(dtISO.slice(8,10),10);
+      return dia<=ateDia;
+    }).reduce((s,d)=>s+docTotalFil(d,cfm),0);
+  }
+
+  const periodoAtual=somaPeriodo(mesRefKey,diasComparar);
+  const periodoAnterior=somaPeriodo(mesCompKey,diasComparar);
+  const [anoRefLbl,mesRefLbl]=mesRefKey.split('-');
+  const [anoCompLbl,mesCompLbl]=mesCompKey.split('-');
+  const labelComparativo=`dias 1–${diasComparar} · ${nomesMes[parseInt(mesCompLbl,10)-1]}/${anoCompLbl} vs ${nomesMes[parseInt(mesRefLbl,10)-1]}/${anoRefLbl}`;
 
   const maxV=Math.max(...periodos.map(p=>p.total),1);
   const melhor=periodos.reduce((m,p)=>p.total>m.total?p:m,periodos[0]||{total:0,label:''});
@@ -3361,12 +3411,12 @@ function renderDashFaturamento(){
 
   // Resumo (cards de comparativo)
   document.getElementById('dash-fat-resumo').innerHTML=`
-    <div style="background:var(--card2);border-radius:10px;padding:10px 14px;flex:1;min-width:130px">
-      <div style="font-size:10.5px;color:var(--mt)">${modo==='mensal'?'Mês atual':'Total do mês'}</div>
+    <div style="background:var(--card2);border-radius:10px;padding:10px 14px;flex:1;min-width:150px">
+      <div style="font-size:10.5px;color:var(--mt)">${nomesMes[parseInt(mesRefLbl,10)-1]}/${anoRefLbl} (dias 1–${diasComparar})</div>
       <div style="font-size:18px;font-weight:800;color:var(--tx)">${fmt(periodoAtual)}</div>
     </div>
-    <div style="background:var(--card2);border-radius:10px;padding:10px 14px;flex:1;min-width:130px">
-      <div style="font-size:10.5px;color:var(--mt)">Comparado ao ${labelComparativo}</div>
+    <div style="background:var(--card2);border-radius:10px;padding:10px 14px;flex:1;min-width:150px">
+      <div style="font-size:10.5px;color:var(--mt)" title="${labelComparativo}">vs ${nomesMes[parseInt(mesCompLbl,10)-1]}/${anoCompLbl} (mesmos dias)</div>
       <div style="font-size:18px;font-weight:800;color:${subiu?'#10b981':'#ef4444'}">${subiu?'▲':'▼'} ${Math.abs(variacao).toFixed(1)}%</div>
     </div>
     <div style="background:var(--card2);border-radius:10px;padding:10px 14px;flex:1;min-width:130px">
