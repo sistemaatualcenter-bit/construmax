@@ -4396,9 +4396,14 @@ function verDoc(id,fromEntregas,fromCli){
   if(isPed&&d.st!=='cancelado'&&!isMesclado&&!fromEntregas){
     pagArea.style.display='block';
     renderPagsModal(d);
-    // Preenche data de pagamento com hoje por padrão
+    // Preenche data de pagamento com hoje por padrão — sempre reseta ao trocar de PEDIDO
+    // (evita "grudar" uma data editada manualmente em outro pedido), mas mantém o valor
+    // se for o mesmo pedido (permite registrar vários pagamentos sem redigitar a data)
     const mpagDt=document.getElementById('mpag-dt');
-    if(mpagDt&&!mpagDt.value)mpagDt.value=dtHtml();
+    if(mpagDt&&mpagDt.dataset.pedidoId!==d.id){
+      mpagDt.value=dtHtml();
+      mpagDt.dataset.pedidoId=d.id;
+    }
     // Alerta crédito disponível
     const credAlert=document.getElementById('mver-cred-alert');
     const credLista=document.getElementById('mver-cred-lista');
@@ -12235,6 +12240,11 @@ function finalizarComanda(){
     if(suc)suc.style.display='none';
     document.getElementById('cmd-btn-imprimir').style.display='none';
   },4000);
+
+  // Se a venda foi a prazo, abre a impressão automaticamente (mesmo comportamento do pedido via modal)
+  if(isPrazo){
+    setTimeout(function(){imprimirDocId(doc.id);},400);
+  }
 
   // Salva localmente + Firebase via debounce (1.5s)
   markDirty('pedidos');markDirty('produtos');saveDB();
