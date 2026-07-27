@@ -1050,6 +1050,32 @@ select.inp option{background:var(--card2)}
     </table></div>
     <div id="rel-gro-total" style="padding:10px 16px;text-align:right;font-size:13px;font-weight:700;border-top:1px solid var(--br2)"></div>
   </div>
+  <!-- FATURAMENTO E LUCRO POR CATEGORIA -->
+  <div class="card" style="margin-bottom:16px">
+    <div style="padding:12px 16px;border-bottom:1px solid var(--br2);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+      <div style="font-weight:700;font-size:13px">📊 Faturamento e Lucro por Categoria</div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <div style="display:flex;align-items:center;gap:5px;background:var(--card2);border:1px solid var(--br);border-radius:8px;padding:4px 9px">
+          <span style="font-size:11px;color:var(--mt)">De:</span>
+          <input class="inp" id="rel-cat2-ini" type="date" style="width:130px;padding:0;border:none;background:none;font-size:12px">
+          <span style="font-size:11px;color:var(--mt)">Até:</span>
+          <input class="inp" id="rel-cat2-fim" type="date" style="width:130px;padding:0;border:none;background:none;font-size:12px">
+        </div>
+        <select class="inp" id="rel-cat2-filtro" style="width:150px;font-size:12px">
+          <option value="">Todas categorias</option>
+        </select>
+        <button class="btn bg bsm" style="color:var(--or);border-color:var(--or)" onclick="filtrarRelCategorias()">🔍 Filtrar</button>
+        <button class="btn bg bsm" onclick="limparRelCategorias()">✕ Limpar</button>
+        <button class="btn bg bsm" onclick="imprimirRelCategorias()">🖨 Imprimir</button>
+      </div>
+    </div>
+    <div id="rel-cat2-kpis" style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;padding:12px 16px;border-bottom:1px solid var(--br2)"></div>
+    <div class="tw"><table>
+      <thead><tr><th>Categoria</th><th>Faturamento</th><th>% do Total</th><th>Lucro</th><th>Margem</th><th>Pedidos</th></tr></thead>
+      <tbody id="rel-cat2-tbody"></tbody>
+    </table></div>
+    <div id="rel-cat2-total" style="padding:10px 16px;text-align:right;font-size:13px;font-weight:700;border-top:1px solid var(--br2)"></div>
+  </div>
   <div class="card" style="margin-bottom:16px">
     <div style="padding:12px 16px;border-bottom:1px solid var(--br2);display:flex;justify-content:space-between;align-items:center">
       <div style="font-weight:700;font-size:13px">🔄 Recorrência de Clientes</div>
@@ -2253,6 +2279,9 @@ select.inp option{background:var(--card2)}
 <div id="sync-bar" style="display:none;position:fixed;top:0;left:0;right:0;background:#92400e;color:#fde68a;text-align:center;padding:8px 12px;font-size:13px;font-weight:700;z-index:9999;box-shadow:0 2px 8px rgba(0,0,0,.3)">
   ⏳ Salvando dados na nuvem... <span style="font-weight:400">não feche ou recarregue esta aba ainda</span>
 </div>
+<div id="storage-cheio-bar" style="display:none;position:fixed;top:0;left:0;right:0;background:#7f1d1d;color:#fecaca;text-align:center;padding:8px 12px;font-size:13px;font-weight:700;z-index:9999;box-shadow:0 2px 8px rgba(0,0,0,.3)">
+  ⚠️ Armazenamento local cheio — seus dados continuam seguros na nuvem, mas o acesso rápido offline parou de atualizar. <span style="font-weight:400">Verifique sua conexão com a internet e evite fechar o sistema até confirmar que sincronizou.</span>
+</div>
 <div id="toast"></div>
 
 <script>
@@ -2398,28 +2427,67 @@ function saveDB(){
   if(_localTimer) clearTimeout(_localTimer);
   _localTimer=setTimeout(function(){
     _localTimer=null;
+    // Remove registros já excluídos (soft-delete) do cache local em TODAS as coleções —
+    // eles continuam 100% seguros na nuvem e na memória, só não precisam ocupar espaço
+    // no "atalho rápido" local, já que o usuário não precisa deles com acesso instantâneo.
+    function semExcluidosCache(arr){return(arr||[]).filter(function(r){return!r._excluido;});}
     try{
       // Cache inteligente: só pedidos últimos 15 dias + em aberto (evita estourar 5MB)
       var _corte=new Date();_corte.setDate(_corte.getDate()-15);var _corteISO=_corte.toISOString().slice(0,10);
-      var _cache=Object.assign({},DB,{pedidos:(DB.pedidos||[]).filter(function(p){
-        var dt=String(p.dtISO||p.dt||'').slice(0,10);if(dt.indexOf('/')>=0)dt=dt.split('/').reverse().join('-');
-        return!['pago','cancelado','mesclado-pago','convertido'].includes(p.st)||dt>=_corteISO;
-      })});
+      var _cache=Object.assign({},DB,{
+        pedidos:semExcluidosCache(DB.pedidos).filter(function(p){
+          var dt=String(p.dtISO||p.dt||'').slice(0,10);if(dt.indexOf('/')>=0)dt=dt.split('/').reverse().join('-');
+          return!['pago','cancelado','mesclado-pago','convertido'].includes(p.st)||dt>=_corteISO;
+        }),
+        clientes:semExcluidosCache(DB.clientes),
+        produtos:semExcluidosCache(DB.produtos),
+        fornecedores:semExcluidosCache(DB.fornecedores),
+        boletos:semExcluidosCache(DB.boletos),
+        despesas:semExcluidosCache(DB.despesas),
+        devolucoes:semExcluidosCache(DB.devolucoes),
+        parceiros:semExcluidosCache(DB.parceiros),
+        tarefas:semExcluidosCache(DB.tarefas),
+        entradas:semExcluidosCache(DB.entradas)
+      });
       localStorage.setItem(KEY, JSON.stringify(_cache));
       localStorage.setItem(KEY+'_ts', String(ts));
+      window._localStorageCheio=false;
+      var _avisoCheio=document.getElementById('storage-cheio-bar');
+      if(_avisoCheio)_avisoCheio.style.display='none';
     }catch(e){
       try{
         var corte=new Date();corte.setDate(corte.getDate()-120);
         var corteISO=corte.toISOString().slice(0,10);
         var dbReduzido=Object.assign({},DB,{
-          pedidos:(DB.pedidos||[]).filter(function(p){
+          pedidos:semExcluidosCache(DB.pedidos).filter(function(p){
             var dt=String(p.dtISO||p.dt||'').slice(0,10);
             return!['pago','cancelado','mesclado-pago','convertido'].includes(p.st)||dt>=corteISO;
-          })
+          }),
+          clientes:semExcluidosCache(DB.clientes),
+          produtos:semExcluidosCache(DB.produtos),
+          fornecedores:semExcluidosCache(DB.fornecedores),
+          boletos:semExcluidosCache(DB.boletos),
+          despesas:semExcluidosCache(DB.despesas),
+          devolucoes:semExcluidosCache(DB.devolucoes),
+          parceiros:semExcluidosCache(DB.parceiros),
+          tarefas:semExcluidosCache(DB.tarefas),
+          entradas:semExcluidosCache(DB.entradas)
         });
         localStorage.setItem(KEY, JSON.stringify(dbReduzido));
         localStorage.setItem(KEY+'_ts', String(ts));
-      }catch(e2){}
+        window._localStorageCheio=false;
+        var _avisoCheio2=document.getElementById('storage-cheio-bar');
+        if(_avisoCheio2)_avisoCheio2.style.display='none';
+      }catch(e2){
+        // Os dois níveis de redução falharam — armazenamento local realmente cheio.
+        // Isso NÃO significa perda de dados (o Firebase continua recebendo tudo
+        // normalmente), mas o cache rápido local parou de atualizar. Avisa bem
+        // visível para o usuário não fechar o sistema sem confirmar que sincronizou.
+        window._localStorageCheio=true;
+        cmxLog('ERRO','Armazenamento local cheio — cache nao atualizado (Firebase continua normal)','');
+        var bar=document.getElementById('storage-cheio-bar');
+        if(bar)bar.style.display='block';
+      }
     }
   },500);
   // Debounce Firebase 3s (reduzido de 8s para diminuir tempo total de espera)
@@ -4403,6 +4471,14 @@ function verDoc(id,fromEntregas,fromCli){
     if(mpagDt&&mpagDt.dataset.pedidoId!==d.id){
       mpagDt.value=dtHtml();
       mpagDt.dataset.pedidoId=d.id;
+    }
+    // Mesma proteção para a forma de pagamento — evita "grudar" a forma usada
+    // em outro pedido (ex: cheque/cartão de um pedido anterior aparecendo já
+    // selecionado sem querer no próximo pedido), mas preserva dentro do mesmo pedido
+    const mpagForma=document.getElementById('mpag-forma');
+    if(mpagForma&&mpagForma.dataset.pedidoId!==d.id){
+      mpagForma.selectedIndex=0;
+      mpagForma.dataset.pedidoId=d.id;
     }
     // Alerta crédito disponível
     const credAlert=document.getElementById('mver-cred-alert');
@@ -10251,6 +10327,152 @@ function imprimirRelGrosseiro(){
   w.document.write(html);w.document.close();
   if(w.document.images.length){var imgs=Array.from(w.document.images);var loaded=0;imgs.forEach(function(img){if(img.complete){loaded++;if(loaded===imgs.length)w.print();}else{img.onload=img.onerror=function(){loaded++;if(loaded===imgs.length)w.print();};}});if(loaded===imgs.length)w.print();}else{w.print();}
 }
+
+// ═══════════════════════════════════════════════════════
+// FATURAMENTO E LUCRO POR CATEGORIA
+// ═══════════════════════════════════════════════════════
+function filtrarRelCategorias(){renderRelCategorias();}
+function limparRelCategorias(){
+  ['rel-cat2-ini','rel-cat2-fim'].forEach(function(id){const el=document.getElementById(id);if(el)el.value='';});
+  const sel=document.getElementById('rel-cat2-filtro');if(sel)sel.value='';
+  renderRelCategorias();
+}
+function calcularVendasPorCategoria(ini,fim){
+  // Retorna {porCategoria:{cat:{faturamento,lucro,pedidosSet}}, totalFat, totalLucro}
+  const peds=DB.pedidos.filter(function(d){
+    if(d.tipo!=='ped'||!isAtivo(d))return false;
+    const dt=d.dtISO||'';
+    if(ini&&dt<ini)return false;
+    if(fim&&dt>fim+'T23:59:59')return false;
+    return true;
+  });
+  const porCategoria={};
+  peds.forEach(function(d){
+    const itensValidos=(d.itens||[]).filter(function(i){return!i.repasse;});
+    const subTotal=itensValidos.reduce(function(s,i){return s+i.qtd*i.punit;},0);
+    const fatorDesc=subTotal>0?(d.total||0)/subTotal:1;
+    itensValidos.forEach(function(it){
+      const cat=getItemCat(it.pid)||'(Sem categoria)';
+      if(!porCategoria[cat])porCategoria[cat]={faturamento:0,lucro:0,pedidosSet:{}};
+      const valorItem=it.qtd*it.punit*fatorDesc;
+      const custoItem=it.qtd*(it.custo||0);
+      porCategoria[cat].faturamento+=valorItem;
+      porCategoria[cat].lucro+=(valorItem-custoItem);
+      porCategoria[cat].pedidosSet[d.id]=true;
+    });
+  });
+  return porCategoria;
+}
+function renderRelCategorias(){
+  const ini=document.getElementById('rel-cat2-ini')?.value||'';
+  const fim=document.getElementById('rel-cat2-fim')?.value||'';
+  const catFiltro=document.getElementById('rel-cat2-filtro')?.value||'';
+
+  // Popula o dropdown de categorias uma única vez (preserva seleção atual)
+  const selCat=document.getElementById('rel-cat2-filtro');
+  if(selCat&&selCat.dataset.populado!=='1'){
+    (DB.categorias||[]).slice().sort().forEach(function(c){
+      const opt=document.createElement('option');
+      opt.value=c;opt.textContent=c;
+      selCat.appendChild(opt);
+    });
+    selCat.dataset.populado='1';
+    selCat.value=catFiltro;
+  }
+
+  const porCategoria=calcularVendasPorCategoria(ini,fim);
+  let catList=Object.entries(porCategoria).map(function(entry){
+    const cat=entry[0],v=entry[1];
+    return{cat:cat,faturamento:v.faturamento,lucro:v.lucro,
+      margem:v.faturamento>0?(v.lucro/v.faturamento*100):0,
+      qtdPedidos:Object.keys(v.pedidosSet).length};
+  });
+  if(catFiltro)catList=catList.filter(function(c){return c.cat===catFiltro;});
+  catList.sort(function(a,b){return b.faturamento-a.faturamento;});
+
+  const totalFat=catList.reduce(function(s,c){return s+c.faturamento;},0);
+  const totalLucro=catList.reduce(function(s,c){return s+c.lucro;},0);
+  const margemGeral=totalFat>0?(totalLucro/totalFat*100):0;
+
+  const kpisEl=document.getElementById('rel-cat2-kpis');
+  if(kpisEl){
+    kpisEl.innerHTML=[
+      {l:'Faturamento Total',v:fmt(totalFat),c:'#f97316'},
+      {l:'Lucro Total',v:fmt(totalLucro),c:'#10b981'},
+      {l:'Margem Geral',v:margemGeral.toFixed(1)+'%',c:'#3b82f6'}
+    ].map(function(k){return'<div class="kpi"><div class="kv" style="color:'+k.c+'">'+k.v+'</div><div class="kl">'+k.l+'</div></div>';}).join('');
+  }
+
+  const tbody=document.getElementById('rel-cat2-tbody');
+  if(tbody){
+    tbody.innerHTML=catList.length?catList.map(function(c){
+      const pct=totalFat>0?Math.round(c.faturamento/totalFat*100):0;
+      return'<tr><td style="font-weight:600">'+c.cat+'</td>'
+        +'<td style="font-weight:700;color:#f97316">'+fmt(c.faturamento)+'</td>'
+        +'<td>'+pct+'%</td>'
+        +'<td style="font-weight:700;color:#10b981">'+fmt(c.lucro)+'</td>'
+        +'<td>'+c.margem.toFixed(1)+'%</td>'
+        +'<td style="text-align:center">'+c.qtdPedidos+'</td></tr>';
+    }).join(''):'<tr><td colspan="6" class="es">Nenhuma venda no período</td></tr>';
+  }
+
+  const totalEl=document.getElementById('rel-cat2-total');
+  if(totalEl)totalEl.innerHTML='Faturamento: <span style="color:#f97316">'+fmt(totalFat)+'</span> &nbsp;·&nbsp; Lucro: <span style="color:#10b981">'+fmt(totalLucro)+'</span> &nbsp;·&nbsp; Margem: <span style="color:#3b82f6">'+margemGeral.toFixed(1)+'%</span>';
+}
+function imprimirRelCategorias(){
+  const ini=document.getElementById('rel-cat2-ini')?.value||'';
+  const fim=document.getElementById('rel-cat2-fim')?.value||'';
+  const catFiltro=document.getElementById('rel-cat2-filtro')?.value||'';
+  const cfg=DB.config;
+  const cor=cfg.corImpressao||'#e65c00';
+
+  const porCategoria=calcularVendasPorCategoria(ini,fim);
+  let catList=Object.entries(porCategoria).map(function(entry){
+    const cat=entry[0],v=entry[1];
+    return{cat:cat,faturamento:v.faturamento,lucro:v.lucro,
+      margem:v.faturamento>0?(v.lucro/v.faturamento*100):0,
+      qtdPedidos:Object.keys(v.pedidosSet).length};
+  });
+  if(catFiltro)catList=catList.filter(function(c){return c.cat===catFiltro;});
+  catList.sort(function(a,b){return b.faturamento-a.faturamento;});
+
+  if(!catList.length){toast('Nenhum dado no período','#f59e0b');return;}
+  const totalFat=catList.reduce(function(s,c){return s+c.faturamento;},0);
+  const totalLucro=catList.reduce(function(s,c){return s+c.lucro;},0);
+  const margemGeral=totalFat>0?(totalLucro/totalFat*100):0;
+  const periodoStr=ini&&fim?ini.split('-').reverse().join('/')+' a '+fim.split('-').reverse().join('/')
+    :ini?'a partir de '+ini.split('-').reverse().join('/')
+    :fim?'até '+fim.split('-').reverse().join('/'):'Todos os períodos';
+
+  const w=window.open('','_blank');
+  if(!w){toast('⚠ Pop-up bloqueado. Permita pop-ups para este site e tente novamente.','#ef4444');return;}
+  var html='<html><head><meta charset="UTF-8"><title>Faturamento e Lucro por Categoria</title>';
+  html+='<style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial,sans-serif;padding:16px 20px;font-size:10px;color:#111}';
+  html+='.header{border-bottom:3px solid '+cor+';padding-bottom:8px;margin-bottom:12px;display:flex;justify-content:space-between}';
+  html+='table{width:100%;border-collapse:collapse;margin:0 0 8px;border:1.5px solid #aaa}';
+  html+='th{background:'+cor+';padding:5px 7px;text-align:left;font-size:9px;color:#fff;font-weight:700;border:1px solid '+cor+'}';
+  html+='td{padding:5px 7px;font-size:9.5px;border:1px solid #ccc}';
+  html+='tr:nth-child(even) td{background:#f5f5f5}';
+  html+='.total{text-align:right;font-weight:700;font-size:11px;margin-top:6px}';
+  html+='</style></head><body>';
+  html+='<div class="header"><div><strong style="font-size:14px;color:'+cor+'">'+(cfg.nome||'CONSTRUMAX')+'</strong><br><span style="font-size:9px;color:#555">'+(cfg.end||'')+' '+(cfg.tel?'· '+cfg.tel:'')+'</span></div>';
+  html+='<div style="text-align:right"><strong style="font-size:13px">Faturamento e Lucro por Categoria</strong><br><span style="font-size:9px;color:#555">'+periodoStr+'</span></div></div>';
+  html+='<table><thead><tr><th>Categoria</th><th>Faturamento</th><th>% do Total</th><th>Lucro</th><th>Margem</th><th>Pedidos</th></tr></thead><tbody>';
+  catList.forEach(function(c){
+    const pct=totalFat>0?Math.round(c.faturamento/totalFat*100):0;
+    html+='<tr><td style="font-weight:700">'+c.cat+'</td>';
+    html+='<td style="text-align:right;color:'+cor+';font-weight:700">'+fmt(c.faturamento)+'</td>';
+    html+='<td style="text-align:center">'+pct+'%</td>';
+    html+='<td style="text-align:right;color:#10b981;font-weight:700">'+fmt(c.lucro)+'</td>';
+    html+='<td style="text-align:center">'+c.margem.toFixed(1)+'%</td>';
+    html+='<td style="text-align:center">'+c.qtdPedidos+'</td></tr>';
+  });
+  html+='</tbody></table>';
+  html+='<div class="total">Faturamento: '+fmt(totalFat)+' &nbsp;·&nbsp; Lucro: '+fmt(totalLucro)+' &nbsp;·&nbsp; Margem: '+margemGeral.toFixed(1)+'%</div>';
+  html+='</body></html>';
+  w.document.write(html);w.document.close();
+  if(w.document.images.length){var imgs=Array.from(w.document.images);var loaded=0;imgs.forEach(function(img){if(img.complete){loaded++;if(loaded===imgs.length)w.print();}else{img.onload=img.onerror=function(){loaded++;if(loaded===imgs.length)w.print();};}});if(loaded===imgs.length)w.print();}else{w.print();}
+}
 function toggleColapso(id){
   const body=document.getElementById('colapso-'+id+'-body');
   const icon=document.getElementById('colapso-'+id+'-icon');
@@ -10518,6 +10740,7 @@ function renderRelatorios(){
   if(grossIni&&!grossIni.value)grossIni.value=dtHtml();
   if(grossFim&&!grossFim.value)grossFim.value=dtHtml();
   renderRelGrosseiro();
+  renderRelCategorias();
   renderVendasProdGrosseiro();
   const ini=document.getElementById('rel-ini').value;
   const fim=document.getElementById('rel-fim').value;
