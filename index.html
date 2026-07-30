@@ -302,6 +302,9 @@ select.inp option{background:var(--card2)}
     </div>
     <div id="dash-fat-resumo" style="display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap"></div>
     <div id="dash-fat-chart" style="display:flex;gap:3px;padding:4px 0 8px;align-items:stretch;overflow-x:auto"></div>
+    <div style="padding:0 16px 12px;text-align:right">
+      <button class="btn bg bsm" onclick="abrirDetalhamentoFaturamento()">📋 Ver detalhamento dos pedidos</button>
+    </div>
   </div>
   <div class="card cp" style="margin-top:16px">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
@@ -2282,6 +2285,22 @@ select.inp option{background:var(--card2)}
 <div id="storage-cheio-bar" style="display:none;position:fixed;top:0;left:0;right:0;background:#7f1d1d;color:#fecaca;text-align:center;padding:8px 12px;font-size:13px;font-weight:700;z-index:9999;box-shadow:0 2px 8px rgba(0,0,0,.3)">
   ⚠️ Armazenamento local cheio — seus dados continuam seguros na nuvem, mas o acesso rápido offline parou de atualizar. <span style="font-weight:400">Verifique sua conexão com a internet e evite fechar o sistema até confirmar que sincronizou.</span>
 </div>
+<div id="detfat-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:10000;align-items:center;justify-content:center;padding:20px" onclick="if(event.target===this)fecharDetalhamentoFaturamento()">
+  <div style="background:var(--bg2,#1a1a1a);border-radius:12px;max-width:900px;width:100%;max-height:85vh;display:flex;flex-direction:column;overflow:hidden">
+    <div style="padding:14px 18px;border-bottom:1px solid var(--br2);display:flex;justify-content:space-between;align-items:center">
+      <div style="font-weight:700;font-size:14px" id="detfat-titulo">Detalhamento do Faturamento</div>
+      <button class="btn bg bsm" onclick="fecharDetalhamentoFaturamento()">✕ Fechar</button>
+    </div>
+    <div style="padding:10px 18px;font-size:11.5px;color:var(--mt);border-bottom:1px solid var(--br2)">
+      Cada linha é um pedido que está contribuindo para o valor mostrado no gráfico. "Mesclagem" mostra se aquele pedido foi absorvido por uma mesclagem (e por isso não conta separadamente) ou se é o resultado de uma mesclagem (também não conta, para não duplicar).
+    </div>
+    <div class="tw" style="flex:1;overflow-y:auto"><table>
+      <thead><tr><th>Pedido</th><th>Cliente</th><th>Data</th><th>Status</th><th>Mesclagem</th><th>Valor</th></tr></thead>
+      <tbody id="detfat-tbody"></tbody>
+    </table></div>
+    <div id="detfat-total" style="padding:10px 18px;text-align:right;font-weight:700;font-size:13px;border-top:1px solid var(--br2)"></div>
+  </div>
+</div>
 <div id="toast"></div>
 
 <script>
@@ -3522,6 +3541,50 @@ function renderDashFaturamento(){
       <div style="font-size:${modo==='diario'?'8px':'9.5px'};color:${ehMelhor?'var(--or)':'var(--mt)'};font-weight:${ehMelhor?'800':'500'};white-space:nowrap">${p.label}</div>
     </div>`;
   }).join('');
+}
+function abrirDetalhamentoFaturamento(){
+  const modo=document.getElementById('dash-fat-modo')?.value||'mensal';
+  const formaFil=document.getElementById('dash-fat-forma')?.value||'';
+  const selMes=document.getElementById('dash-fat-mes');
+  const cfm=catFilModo||'com';
+  const nomesMes=['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
+  const hojeReal=new Date();
+
+  // Mesmo cálculo de "mês de referência" usado no gráfico, para mostrar o
+  // detalhamento do período que está atualmente sendo exibido na tela.
+  const mesRefKey=modo==='mensal'
+    ?(hojeReal.getFullYear()+'-'+String(hojeReal.getMonth()+1).padStart(2,'0'))
+    :(selMes.value||hojeReal.getFullYear()+'-'+String(hojeReal.getMonth()+1).padStart(2,'0'));
+  const [anoRef,mesRefNum]=mesRefKey.split('-').map(Number);
+
+  const lista=DB.pedidos.filter(function(d){
+    if(d.tipo!=='ped'||!isAtivoFat(d))return false;
+    if((d.dtISO||'').slice(0,7)!==mesRefKey)return false;
+    if(formaFil&&d.pag!==formaFil)return false;
+    return true;
+  }).sort(function(a,b){return(a.dtISO||'').localeCompare(b.dtISO||'');});
+
+  document.getElementById('detfat-titulo').textContent='Detalhamento — '+nomesMes[mesRefNum-1]+'/'+anoRef;
+
+  const tbody=document.getElementById('detfat-tbody');
+  let total=0;
+  tbody.innerHTML=lista.length?lista.map(function(d){
+    const valor=docTotalFil(d,cfm);
+    total+=valor;
+    const ehOriginalMesclado=['mesclado-aberto','mesclado-pago'].includes(d.st);
+    const tagMescla=ehOriginalMesclado
+      ?'<span style="color:#f59e0b">Original absorvido em mesclagem</span>'
+      :'<span style="color:var(--mt)">—</span>';
+    return`<tr><td style="font-weight:600">${d.num}</td><td>${d.cliNome||''}</td><td>${d.dt||''}</td>
+      <td>${d.st}</td><td>${tagMescla}</td>
+      <td style="text-align:right;font-weight:700;color:#f97316">${fmt(valor)}</td></tr>`;
+  }).join(''):'<tr><td colspan="6" class="es">Nenhum pedido neste período</td></tr>';
+
+  document.getElementById('detfat-total').innerHTML='Total: <span style="color:#f97316">'+fmt(total)+'</span> · '+lista.length+' pedido(s)';
+  document.getElementById('detfat-overlay').style.display='flex';
+}
+function fecharDetalhamentoFaturamento(){
+  document.getElementById('detfat-overlay').style.display='none';
 }
 function impCrit(){
   const low=semExcluidos(DB.produtos).filter(p=>p.est<=p.estMin);
