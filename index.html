@@ -1506,6 +1506,16 @@ select.inp option{background:var(--card2)}
   <div id="bk-storage"></div>
   <!-- Auto-backups de emergência -->
   <div class="card cp" style="margin-top:14px" id="bk-auto"></div>
+  <div class="card cp" style="margin-top:14px">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+      <div class="stl" style="margin-bottom:0">🔍 Verificação de Pedidos Duplicados</div>
+      <button class="btn bp bsm" onclick="verificarDuplicidades()">Verificar agora</button>
+    </div>
+    <div style="font-size:11.5px;color:var(--mt);margin-top:6px">
+      Procura pedidos que podem ter sido registrados em dobro (mesmo número, ou mesmo cliente/valor/data). Não apaga nem altera nada — só mostra para você revisar e decidir.
+    </div>
+    <div id="bk-dup-resultado" style="margin-top:10px"></div>
+  </div>
   <div class="two" style="margin-top:14px">
     <div class="card cp">
       <div class="stl">💾 Exportar Backup</div>
@@ -2817,49 +2827,71 @@ function isAtivoFat(d){
 // local). Roda após qualquer mesclagem de dados local+nuvem. Mantém o pedido mais
 // antigo com o número original e renumera os demais para o próximo disponível,
 // deixando um registro na observação para não confundir o histórico.
-function corrigirColisoesNumero(){
-  if(!DB.pedidos||!DB.pedidos.length)return;
-  const grupos={};
-  DB.pedidos.forEach(function(d){
-    if(!d.num||d._excluido||!['ped','orc'].includes(d.tipo))return;
+// Detecta (sem alterar nada) possíveis duplicidades entre pedidos ativos, para
+// revisão manual. Cobre dois sinais diferentes:
+//  1) Mesmo número visível (mesmo tipo) em pedidos diferentes — pode ser um
+//     dispositivo dessincronizado, OU pode ser coincidência de outra causa;
+//     não dá para saber com certeza automaticamente, por isso NÃO corrige sozinho.
+//  2) Mesmo cliente + mesmo valor total + data muito próxima (mesmo dia) — sinal
+//     de uma venda registrada duas vezes (ex: clique duplo no Salvar), mesmo que
+//     os números sejam diferentes.
+// Retorna a lista de grupos suspeitos; não modifica DB.pedidos em nenhum caso.
+function detectarPossiveisDuplicidades(){
+  const ativos=(DB.pedidos||[]).filter(function(d){return!d._excluido&&['ped','orc'].includes(d.tipo);});
+  const resultado=[];
+
+  // Sinal 1: mesmo número + mesmo tipo
+  const porNumero={};
+  ativos.forEach(function(d){
     const chave=d.tipo+'|'+d.num;
-    if(!grupos[chave])grupos[chave]=[];
-    grupos[chave].push(d);
+    if(!porNumero[chave])porNumero[chave]=[];
+    porNumero[chave].push(d);
   });
-  let corrigiu=false;
-  // Descobre o maior número REALMENTE em uso para cada tipo — não confia só em
-  // DB.seq, que pode estar dessincronizado (é justamente essa dessincronização
-  // entre dispositivos que causa a colisão original).
-  function maiorNumeroEmUso(tipo){
-    let maior=0;
-    DB.pedidos.forEach(function(d){
-      if(d.tipo!==tipo||!d.num)return;
-      const n=parseInt(String(d.num).replace(/\D/g,''),10);
-      if(!isNaN(n)&&n>maior)maior=n;
-    });
-    return maior;
-  }
-  Object.keys(grupos).forEach(function(chave){
-    const grupo=grupos[chave];
+  Object.values(porNumero).forEach(function(grupo){
+    if(grupo.length>1)resultado.push({motivo:'mesmo-numero',pedidos:grupo});
+  });
+
+  // Sinal 2: mesmo cliente + mesmo valor total + mesma data (possível clique duplo)
+  const porClienteValorData={};
+  ativos.forEach(function(d){
+    if(!d.cliId||!d.total||!d.dtISO)return;
+    const chave=d.tipo+'|'+d.cliId+'|'+d.total+'|'+String(d.dtISO).slice(0,10);
+    if(!porClienteValorData[chave])porClienteValorData[chave]=[];
+    porClienteValorData[chave].push(d);
+  });
+  Object.values(porClienteValorData).forEach(function(grupo){
     if(grupo.length<2)return;
-    // Mantém o mais antigo (por data) com o número original; desempate por id para ser determinístico
-    grupo.sort(function(a,b){return(a.dtISO||'').localeCompare(b.dtISO||'')||String(a.id).localeCompare(String(b.id));});
-    for(let i=1;i<grupo.length;i++){
-      const dup=grupo[i];
-      const tipo=dup.tipo;
-      const prefix=tipo==='orc'?'ORC':'PED';
-      const seqAtual=(tipo==='orc'?DB.seq.orc:DB.seq.ped)||0;
-      const novoSeq=Math.max(seqAtual,maiorNumeroEmUso(tipo))+1;
-      if(tipo==='orc')DB.seq.orc=novoSeq;else DB.seq.ped=novoSeq;
-      const numAntigo=dup.num;
-      dup.num=prefix+'-'+String(novoSeq).padStart(3,'0');
-      dup.obs=(dup.obs?dup.obs+' · ':'')+'Renumerado automaticamente de '+numAntigo+' (número duplicado detectado — provavelmente criado em dois dispositivos ao mesmo tempo)';
-      corrigiu=true;
-      if(typeof cmxLog==='function')cmxLog('AVISO','Colisão de número corrigida','de '+numAntigo+' para '+dup.num+' (id='+dup.id+')');
-    }
+    // Evita listar de novo um grupo que já apareceu pelo sinal 1 (mesmo número)
+    const jaListado=resultado.some(function(r){return r.pedidos.length===grupo.length&&r.pedidos.every(function(p){return grupo.includes(p);});});
+    if(!jaListado)resultado.push({motivo:'mesmo-cliente-valor-data',pedidos:grupo});
   });
-  if(corrigiu)markDirty('pedidos');
-  return corrigiu;
+
+  return resultado;
+}
+function verificarDuplicidades(){
+  const grupos=detectarPossiveisDuplicidades();
+  const el=document.getElementById('bk-dup-resultado');
+  if(!el)return;
+  if(!grupos.length){
+    el.innerHTML='<div style="color:#10b981;font-size:12.5px;padding:8px 0">✓ Nenhuma duplicidade encontrada.</div>';
+    return;
+  }
+  const nomesMotivo={
+    'mesmo-numero':'⚠️ Mesmo número de pedido',
+    'mesmo-cliente-valor-data':'⚠️ Mesmo cliente, valor e data (possível registro em dobro)'
+  };
+  el.innerHTML='<div style="color:#f59e0b;font-size:12.5px;font-weight:700;margin-bottom:8px">'+grupos.length+' grupo(s) suspeito(s) encontrado(s) — revise antes de excluir qualquer um:</div>'
+    +grupos.map(function(g){
+      return'<div style="background:var(--card2);border-radius:8px;padding:10px 12px;margin-bottom:8px">'
+        +'<div style="font-size:11px;color:var(--mt);margin-bottom:6px">'+(nomesMotivo[g.motivo]||g.motivo)+'</div>'
+        +g.pedidos.map(function(p){
+          return'<div style="display:flex;justify-content:space-between;gap:8px;font-size:12px;padding:3px 0;cursor:pointer" onclick="verDoc(\''+p.id+'\')" title="Clique para abrir este pedido">'
+            +'<span><strong>'+p.num+'</strong> — '+(p.cliNome||'')+' · '+(p.dt||'')+'</span>'
+            +'<span style="color:#f97316;font-weight:700">'+fmt(p.total||0)+'</span>'
+          +'</div>';
+        }).join('')
+      +'</div>';
+    }).join('');
 }
 function isPedPago(d){return['pago','entregue','mesclado-pago'].includes(d.st)||docSaldo(d)<=0;}
 function stParaEntrega(d){return d.st==='para-entrega';}
@@ -4050,7 +4082,6 @@ function abrirDoc(tipo){
           const fbPeds=[...p1,...p2];
           if(fbPeds.length>=DB.pedidos.length){
             DB.pedidos=fbPeds;
-            corrigirColisoesNumero();
           }
           localStorage.setItem(KEY,JSON.stringify(DB));
         }catch(e){console.warn('Sync rápido falhou:',e);}
@@ -12116,7 +12147,7 @@ function syncAntesDe(colecoes, callback){
           const arr1=p1&&p1.exists?JSON.parse(p1.data().pedidos||'[]'):[];
           const arr2=p2&&p2.exists?JSON.parse(p2.data().pedidos||'[]'):[];
           const fbPeds=[...arr1,...arr2];
-          if(fbPeds.length>=DB.pedidos.length){DB.pedidos=fbPeds;corrigirColisoesNumero();}
+          if(fbPeds.length>=DB.pedidos.length)DB.pedidos=fbPeds;
         }catch(e){}
       }
       localStorage.setItem(KEY,JSON.stringify(DB));
@@ -13066,7 +13097,6 @@ function iniciarAutoBackup(){
             return Object.values(map);
           }
           DB.pedidos=mergeBi(fbPeds,DB.pedidos);
-          corrigirColisoesNumero();
           var fbCli=metaCli&&metaCli.exists?JSON.parse(metaCli.data().clientes||'[]'):JSON.parse(m.clientes||'[]');
           DB.clientes=mergeBi(fbCli,DB.clientes);
           var fbProds=[];
@@ -13260,7 +13290,6 @@ window.auth.onAuthStateChanged(function(user){
         const idsLocais={};
         (DB.pedidos||[]).forEach(function(p){if(p.id)idsLocais[p.id]=true;});
         fbPeds.forEach(function(p){if(p.id&&!idsLocais[p.id]){DB.pedidos.push(p);idsLocais[p.id]=true;}});
-        corrigirColisoesNumero();
         cmxLog('SYNC','Local mais recente — mesclado com Firebase antes de upload','local+fb='+DB.pedidos.length);
         // Não faz upload imediato — deixa o próximo saveDB normal subir os dados
         // Isso evita batch gigante no login que causa erro
