@@ -2784,7 +2784,14 @@ function isAtivo(d){return!d._excluido&&!['cancelado','mesclado','mesclado-abert
 // mesclagem (_ehMesclagem) para não contar o mesmo valor duas vezes. Não usar
 // para saldo devedor/"A Receber" — nesse caso use isAtivo() normal, pois a
 // cobrança da dívida passa a ser feita pelo pedido mesclado, não pelos originais.
-function isAtivoFat(d){return!d._excluido&&!d._ehMesclagem&&(!['cancelado','mesclado','convertido'].includes(d.st));}
+function isAtivoFat(d){
+  // Identifica pedido resultado de mesclagem tanto pela marca nova (_ehMesclagem,
+  // presente em mesclagens feitas após esta correção) quanto pelo texto padrão
+  // que SEMPRE foi gravado em obs para qualquer mesclagem, nova ou antiga —
+  // isso evita contar em dobro mesclagens feitas antes desta correção existir.
+  const ehMesclagem=d._ehMesclagem||(d.obs&&d.obs.indexOf('MESCLADO de:')===0);
+  return!d._excluido&&!ehMesclagem&&(!['cancelado','mesclado','convertido'].includes(d.st));
+}
 function isPedPago(d){return['pago','entregue','mesclado-pago'].includes(d.st)||docSaldo(d)<=0;}
 function stParaEntrega(d){return d.st==='para-entrega';}
 // Normaliza status legados de dados antigos
