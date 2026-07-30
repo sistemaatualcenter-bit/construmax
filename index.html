@@ -2811,6 +2811,56 @@ function isAtivoFat(d){
   const ehMesclagem=d._ehMesclagem||(d.obs&&d.obs.indexOf('MESCLADO de:')===0);
   return!d._excluido&&!ehMesclagem&&(!['cancelado','mesclado','convertido'].includes(d.st));
 }
+// Detecta e corrige pedidos com o MESMO número visível (ex: dois "PED-101") mas
+// IDs diferentes — isso acontece quando dois dispositivos/abas criam pedidos ao
+// mesmo tempo sem sincronizar entre si primeiro (cada um usa seu próprio contador
+// local). Roda após qualquer mesclagem de dados local+nuvem. Mantém o pedido mais
+// antigo com o número original e renumera os demais para o próximo disponível,
+// deixando um registro na observação para não confundir o histórico.
+function corrigirColisoesNumero(){
+  if(!DB.pedidos||!DB.pedidos.length)return;
+  const grupos={};
+  DB.pedidos.forEach(function(d){
+    if(!d.num||d._excluido||!['ped','orc'].includes(d.tipo))return;
+    const chave=d.tipo+'|'+d.num;
+    if(!grupos[chave])grupos[chave]=[];
+    grupos[chave].push(d);
+  });
+  let corrigiu=false;
+  // Descobre o maior número REALMENTE em uso para cada tipo — não confia só em
+  // DB.seq, que pode estar dessincronizado (é justamente essa dessincronização
+  // entre dispositivos que causa a colisão original).
+  function maiorNumeroEmUso(tipo){
+    let maior=0;
+    DB.pedidos.forEach(function(d){
+      if(d.tipo!==tipo||!d.num)return;
+      const n=parseInt(String(d.num).replace(/\D/g,''),10);
+      if(!isNaN(n)&&n>maior)maior=n;
+    });
+    return maior;
+  }
+  Object.keys(grupos).forEach(function(chave){
+    const grupo=grupos[chave];
+    if(grupo.length<2)return;
+    // Mantém o mais antigo (por data) com o número original; desempate por id para ser determinístico
+    grupo.sort(function(a,b){return(a.dtISO||'').localeCompare(b.dtISO||'')||String(a.id).localeCompare(String(b.id));});
+    for(let i=1;i<grupo.length;i++){
+      const dup=grupo[i];
+      const tipo=dup.tipo;
+      const prefix=tipo==='orc'?'ORC':'PED';
+      const seqAtual=(tipo==='orc'?DB.seq.orc:DB.seq.ped)||0;
+      const novoSeq=Math.max(seqAtual,maiorNumeroEmUso(tipo))+1;
+      if(tipo==='orc')DB.seq.orc=novoSeq;else DB.seq.ped=novoSeq;
+      const numAntigo=dup.num;
+      dup.num=prefix+'-'+String(novoSeq).padStart(3,'0');
+      dup.obs=(dup.obs?dup.obs+' · ':'')+'Renumerado automaticamente de '+numAntigo+' (número duplicado detectado — provavelmente criado em dois dispositivos ao mesmo tempo)';
+      corrigiu=true;
+      if(typeof cmxLog==='function')cmxLog('AVISO','Colisão de número corrigida','de '+numAntigo+' para '+dup.num+' (id='+dup.id+')');
+    }
+  });
+  if(corrigiu)markDirty('pedidos');
+  return corrigiu;
+}
 function isPedPago(d){return['pago','entregue','mesclado-pago'].includes(d.st)||docSaldo(d)<=0;}
 function stParaEntrega(d){return d.st==='para-entrega';}
 // Normaliza status legados de dados antigos
@@ -4000,6 +4050,7 @@ function abrirDoc(tipo){
           const fbPeds=[...p1,...p2];
           if(fbPeds.length>=DB.pedidos.length){
             DB.pedidos=fbPeds;
+            corrigirColisoesNumero();
           }
           localStorage.setItem(KEY,JSON.stringify(DB));
         }catch(e){console.warn('Sync rápido falhou:',e);}
@@ -4383,12 +4434,16 @@ function renderItensDoc(){
   setTimeout(aplicarBlurDoc,0);
 }
 function salvarDoc(){
+  if(window._salvandoDoc)return; // bloqueia clique duplo — evita criar o mesmo pedido duas vezes
   const cliId=document.getElementById('mdoc-cli').value;
   if(!cliId){toast('⚠ Selecione um cliente','#f59e0b');return;}
   if(!docItens.length){toast('⚠ Adicione produtos','#f59e0b');return;}
   const tipo=document.getElementById('mdoc-tipo').value;
   const isOrc=tipo==='orc';
   if(!isOrc&&!document.getElementById('mdoc-pag').value){toast('⚠ Selecione a forma de pagamento','#f59e0b');return;}
+  window._salvandoDoc=true;
+  const btnSalvarDoc=document.getElementById('mdoc-salvar-btn');
+  if(btnSalvarDoc){btnSalvarDoc.disabled=true;btnSalvarDoc.textContent='Salvando...';}
   const cli=DB.clientes.find(c=>c.id===cliId);
   const sub=docItens.reduce((s,i)=>s+i.qtd*i.punit,0);
   const descRaw=parseFloat(document.getElementById('mdoc-desc').value)||0;
@@ -4471,11 +4526,15 @@ function salvarDoc(){
     limparRascunho(tipo);
     markDirty('pedidos');markDirty('meta');saveDB();closeMD('doc');renderOrcamentos();
     toast('✓ Orçamento atualizado!');
+    if(btnSalvarDoc){btnSalvarDoc.disabled=false;btnSalvarDoc.textContent='✓ Salvar';}
+    // Atraso proposital antes de liberar a flag: garante que um segundo clique
+    // que o navegador já tinha na fila (duplo clique real) ainda encontre a
+    // proteção ativa quando for processado, mesmo que o salvamento em si seja
+    // rápido demais para bloquear isso de forma puramente síncrona.
+    setTimeout(function(){window._salvandoDoc=false;},800);
     return;
   }
   // Usa contador atômico para garantir número único entre dispositivos
-  const btnSalvar=document.getElementById('mdoc-salvar')||document.querySelector('#md-doc .btn.bp');
-  if(btnSalvar){btnSalvar.disabled=true;btnSalvar.textContent='Salvando...';}
   getProximoNumPed(tipo,function(err,numAtomico){
     // Atualiza o número no doc com o valor atômico
     doc.num=numAtomico;
@@ -4485,7 +4544,10 @@ function salvarDoc(){
     salvarRegistro('pedidos',doc.id,doc);
     limparRascunho(tipo);
     markDirty('pedidos');if(!isOrc)markDirty('produtos');saveDB();closeMD('doc');
-    if(btnSalvar){btnSalvar.disabled=false;btnSalvar.textContent='Salvar';}
+    if(btnSalvarDoc){btnSalvarDoc.disabled=false;btnSalvarDoc.textContent='✓ Salvar';}
+    // Mesmo atraso proposital — protege contra um segundo clique já enfileirado
+    // pelo navegador antes do primeiro salvamento terminar (duplo clique real).
+    setTimeout(function(){window._salvandoDoc=false;},800);
     if(isOrc)renderOrcamentos();else renderPedidos();
     const pagMsg=!isOrc&&doc.pagamentos.length?' -- Pago: '+fmt(docPago(doc)):'';
     toast('✓ '+numAtomico+' criado!'+(isOrc?'':(' -- Estoque atualizado'+pagMsg)));
@@ -12054,7 +12116,7 @@ function syncAntesDe(colecoes, callback){
           const arr1=p1&&p1.exists?JSON.parse(p1.data().pedidos||'[]'):[];
           const arr2=p2&&p2.exists?JSON.parse(p2.data().pedidos||'[]'):[];
           const fbPeds=[...arr1,...arr2];
-          if(fbPeds.length>=DB.pedidos.length)DB.pedidos=fbPeds;
+          if(fbPeds.length>=DB.pedidos.length){DB.pedidos=fbPeds;corrigirColisoesNumero();}
         }catch(e){}
       }
       localStorage.setItem(KEY,JSON.stringify(DB));
@@ -13004,6 +13066,7 @@ function iniciarAutoBackup(){
             return Object.values(map);
           }
           DB.pedidos=mergeBi(fbPeds,DB.pedidos);
+          corrigirColisoesNumero();
           var fbCli=metaCli&&metaCli.exists?JSON.parse(metaCli.data().clientes||'[]'):JSON.parse(m.clientes||'[]');
           DB.clientes=mergeBi(fbCli,DB.clientes);
           var fbProds=[];
@@ -13197,6 +13260,7 @@ window.auth.onAuthStateChanged(function(user){
         const idsLocais={};
         (DB.pedidos||[]).forEach(function(p){if(p.id)idsLocais[p.id]=true;});
         fbPeds.forEach(function(p){if(p.id&&!idsLocais[p.id]){DB.pedidos.push(p);idsLocais[p.id]=true;}});
+        corrigirColisoesNumero();
         cmxLog('SYNC','Local mais recente — mesclado com Firebase antes de upload','local+fb='+DB.pedidos.length);
         // Não faz upload imediato — deixa o próximo saveDB normal subir os dados
         // Isso evita batch gigante no login que causa erro
