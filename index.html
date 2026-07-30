@@ -2777,6 +2777,14 @@ function tg(t,b,c){return`<span class="tag" style="background:${b}20;color:${c};
 function tgSt(s){const x=SC[s]||SC.orcamento;return tg(x.l,x.c,x.c);}
 // Pedido/ORC "ativo" = não cancelado, não mesclado, não convertido
 function isAtivo(d){return!d._excluido&&!['cancelado','mesclado','mesclado-aberto','mesclado-pago','convertido'].includes(d.st);}
+// Versão de isAtivo() para relatórios de FATURAMENTO/LUCRO por período (Dashboard,
+// gráfico de faturamento, vendas por categoria). Diferença: inclui pedidos que
+// foram incorporados numa mesclagem (mesclado-aberto/mesclado-pago) — porque a
+// venda em si aconteceu neles, na data correta — e exclui o pedido RESULTADO da
+// mesclagem (_ehMesclagem) para não contar o mesmo valor duas vezes. Não usar
+// para saldo devedor/"A Receber" — nesse caso use isAtivo() normal, pois a
+// cobrança da dívida passa a ser feita pelo pedido mesclado, não pelos originais.
+function isAtivoFat(d){return!d._excluido&&!d._ehMesclagem&&(!['cancelado','mesclado','convertido'].includes(d.st));}
 function isPedPago(d){return['pago','entregue','mesclado-pago'].includes(d.st)||docSaldo(d)<=0;}
 function stParaEntrega(d){return d.st==='para-entrega';}
 // Normaliza status legados de dados antigos
@@ -3074,7 +3082,7 @@ function renderDash(){
       return true;
     });
   }
-  const pedsFat=docs.filter(d=>d.tipo==='ped'&&isAtivo(d));
+  const pedsFat=docs.filter(d=>d.tipo==='ped'&&isAtivoFat(d));
   const cfm=catFilModo||'com';
   const cd=DB.config.catDestaque||'Grosseiro';
   const totalV=pedsFat.reduce((s,d)=>s+docTotalFil(d,cfm),0);
@@ -3359,7 +3367,7 @@ function renderDashFaturamento(){
   const cfm=catFilModo||'com';
   const nomesMes=['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
 
-  const todos=DB.pedidos.filter(d=>d.tipo==='ped'&&isAtivo(d)&&(!formaFil||d.pag===formaFil));
+  const todos=DB.pedidos.filter(d=>d.tipo==='ped'&&isAtivoFat(d)&&(!formaFil||d.pag===formaFil));
 
   // Popula o seletor de mês (só visível no modo diário)
   if(modo==='diario'){
@@ -5696,14 +5704,19 @@ function confirmarMescla(){
     return s+Math.max(0,(d.itens||[]).filter(i=>!i.repasse).reduce((t,i)=>t+i.qtd*(i.punit*fatorDesc-i.custo),0));
   },0);
   const num='PED-'+String(DB.seq.ped).padStart(3,'0'); // será substituído pelo atômico
-  // Usa a data do pedido mais antigo
+  // Usa a data do pedido mais antigo (como já era)
   const pedMaisAntigo=[...peds].sort((a,b)=>(a.dtISO||a.dt).localeCompare(b.dtISO||b.dt))[0];
   const dtMesclado=pedMaisAntigo.dt||hj();
   const dtISOMesclado=pedMaisAntigo.dtISO||dtHtml();
   const novo={id:uid(),num,tipo:'ped',cliId:peds[0].cliId,cliNome:cli.nome,dt:dtMesclado,dtISO:dtISOMesclado,
     pag:peds[peds.length-1].pag,desc:0,descTipo:'R$',obs:'MESCLADO de: '+peds.map(d=>d.num).join(', '),vend:'',
     parceiroId:peds.find(d=>d.parceiroId)?.parceiroId||'',
-    itens:allItens,total,lucro,pagamentos:allPagamentos,estoqueBaixado:true};
+    itens:allItens,total,lucro,pagamentos:allPagamentos,estoqueBaixado:true,
+    // Marca que este pedido é resultado de mesclagem — usado para excluí-lo dos
+    // relatórios de faturamento/lucro por mês (o valor já é contado nos pedidos
+    // originais, que continuam existindo com suas datas corretas). Continua
+    // contando normalmente em "A Receber" (saldo devedor) e "Recebido".
+    _ehMesclagem:true};
   // Herda dados de entrega: se algum dos pedidos originais tinha entrega, copia para o novo
   const pedComEntrega=peds.find(d=>d.entrega&&d.entrega.st!=='entregue');
   if(pedComEntrega){
@@ -10340,7 +10353,7 @@ function limparRelCategorias(){
 function calcularVendasPorCategoria(ini,fim){
   // Retorna {porCategoria:{cat:{faturamento,lucro,pedidosSet}}, totalFat, totalLucro}
   const peds=DB.pedidos.filter(function(d){
-    if(d.tipo!=='ped'||!isAtivo(d))return false;
+    if(d.tipo!=='ped'||!isAtivoFat(d))return false;
     const dt=d.dtISO||'';
     if(ini&&dt<ini)return false;
     if(fim&&dt>fim+'T23:59:59')return false;
@@ -10765,7 +10778,7 @@ function renderRelatorios(){
     const fatorDesc=subTotal>0?(d.total||0)/subTotal:1;
     d.itens.forEach(it=>{if(mapa[it.pid]){mapa[it.pid].saidas+=it.qtd;mapa[it.pid].valorSaida+=it.qtd*it.punit*fatorDesc;}});
   });
-  devsFil.forEach(d=>{d.itens.forEach(it=>{if(mapa[it.pid])mapa[it.pid].devolucoes+=it.qtdDev;});});
+  devsFil.forEach(d=>{(d.itens||[]).forEach(it=>{if(mapa[it.pid])mapa[it.pid].devolucoes+=it.qtdDev;});});
   const prods=Object.values(mapa);
   const totalE=prods.reduce((s,p)=>s+p.entradas,0);
   const totalS=prods.reduce((s,p)=>s+p.saidas,0);
