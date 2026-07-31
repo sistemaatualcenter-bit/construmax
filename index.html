@@ -1007,9 +1007,17 @@ select.inp option{background:var(--card2)}
     </div>
   </div>
   <div class="kg" id="cp-kpis" style="grid-template-columns:repeat(4,1fr);margin-bottom:16px"></div>
+  <div id="cp-lote-bar" style="display:none;background:var(--or);color:#fff;border-radius:10px;padding:10px 16px;margin-bottom:12px;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+    <div style="font-weight:700;font-size:13px"><span id="cp-lote-count">0</span> boleto(s) selecionado(s)</div>
+    <div style="display:flex;gap:8px">
+      <button class="btn bsm" style="background:#fff;color:var(--or)" onclick="abrirPagamentoLoteBoleto()">💳 Registrar pagamento em lote</button>
+      <button class="btn bsm" style="background:rgba(255,255,255,.2);color:#fff;border-color:transparent" onclick="limparSelecaoBoletos()">✕ Limpar seleção</button>
+    </div>
+  </div>
   <div class="card">
     <div class="tw"><table>
       <thead><tr>
+        <th style="width:30px"><input type="checkbox" id="cp-check-todos" onchange="toggleSelecionarTodosBoletos(this.checked)" title="Selecionar todos os boletos em aberto visíveis"></th>
         <th>Nº Boleto</th><th>Fornecedor</th><th>NF</th><th>Emissão</th><th>Vencimento</th><th>Valor</th><th>Obs</th><th>Status</th><th>Ações</th>
       </tr></thead>
       <tbody id="cp-tbody"></tbody>
@@ -1815,6 +1823,23 @@ select.inp option{background:var(--card2)}
     <div class="mf">
       <button class="btn bg" onclick="closeMD('boleto-pag')">Cancelar</button>
       <button class="btn bp" onclick="confirmarPagBoleto()">✓ Confirmar Pagamento</button>
+    </div>
+  </div>
+
+  <div id="md-boleto-pag-lote" class="md" style="display:none;max-width:420px">
+    <div class="mh">
+      <div class="mt2x">💳 Registrar Pagamento em Lote</div>
+      <button class="btn bg bsm" onclick="closeMD('boleto-pag-lote')">✕</button>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <div id="mbpl-info" style="background:var(--card2);border-radius:8px;padding:10px;font-size:12px"></div>
+      <div style="font-size:11.5px;color:var(--mt)">A mesma data e observação serão aplicadas a todos os boletos selecionados, cada um com seu valor integral.</div>
+      <div class="fgrp"><label class="fl">Data Pagamento *</label><input class="inp" id="mbpl-dt" type="date"></div>
+      <div class="fgrp"><label class="fl">Observação (aplicada a todos)</label><input class="inp" id="mbpl-obs" placeholder="Opcional"></div>
+    </div>
+    <div class="mf">
+      <button class="btn bg" onclick="closeMD('boleto-pag-lote')">Cancelar</button>
+      <button class="btn bp" onclick="confirmarPagamentoLoteBoleto()">✓ Confirmar Pagamento em Lote</button>
     </div>
   </div>
 
@@ -6981,6 +7006,7 @@ function renderParceiros(){
 // ═══════════════════════════════════════════════════════
 // CONTAS A PAGAR (BOLETOS)
 // ═══════════════════════════════════════════════════════
+let cpSelecionados=[]; // IDs de boletos selecionados para pagamento em lote
 function renderContasPagar(){
   if(!DB.boletos)DB.boletos=[];
   const q=(document.getElementById('src-cp')?.value||'').toLowerCase();
@@ -7020,6 +7046,10 @@ function renderContasPagar(){
     return(a.venc||'').localeCompare(b.venc||'');
   });
 
+  // Remove da seleção qualquer boleto que não esteja mais em aberto (foi pago, excluído, etc.)
+  const idsEmAberto=new Set(lista.filter(b=>!b.pago).map(b=>b.id));
+  cpSelecionados=cpSelecionados.filter(id=>idsEmAberto.has(id));
+
   // KPIs — calculados a partir da lista JÁ FILTRADA (fornecedor, período, status, busca)
   const abertos=lista.filter(b=>!b.pago);
   const totalAberto=abertos.reduce((s,b)=>s+b.valor,0);
@@ -7055,6 +7085,7 @@ function renderContasPagar(){
       :vencido?'<span style="background:#ef444420;color:#ef4444;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:700">⚠ Vencido</span>'
       :'<span style="background:#3b82f620;color:#3b82f6;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:700">Em Aberto</span>';
     return`<tr style="border-left:3px solid ${corBorda};background:${corLinha}">
+      <td>${!b.pago?`<input type="checkbox" class="cp-check-linha" data-id="${b.id}" ${cpSelecionados.includes(b.id)?'checked':''} onchange="toggleSelecaoBoleto('${b.id}',this.checked)">`:''}</td>
       <td style="font-family:monospace;font-size:11px;color:var(--mt)">${b.num||'--'}</td>
       <td style="font-weight:600">${b.forNome||'--'}</td>
       <td style="font-size:12px;color:var(--or)">${b.nf||'--'}</td>
@@ -7073,7 +7104,88 @@ function renderContasPagar(){
         <button class="btn bd bsm" onclick="delBoleto('${b.id}')">🗑</button>
       </div></td>
     </tr>`;
-  }).join(''):`<tr><td colspan="9" class="es">Nenhum boleto${fil?' com esse filtro':''}</td></tr>`;
+  }).join(''):`<tr><td colspan="10" class="es">Nenhum boleto${fil?' com esse filtro':''}</td></tr>`;
+  atualizarBarraLoteBoletos();
+}
+
+function toggleSelecaoBoleto(id,checked){
+  if(checked){
+    if(!cpSelecionados.includes(id))cpSelecionados.push(id);
+  } else {
+    cpSelecionados=cpSelecionados.filter(x=>x!==id);
+  }
+  atualizarBarraLoteBoletos();
+}
+function toggleSelecionarTodosBoletos(checked){
+  // Seleciona/deseleciona todos os boletos EM ABERTO atualmente visíveis na tela (respeitando os filtros)
+  document.querySelectorAll('.cp-check-linha').forEach(function(chk){
+    chk.checked=checked;
+    const id=chk.dataset.id;
+    if(checked){
+      if(!cpSelecionados.includes(id))cpSelecionados.push(id);
+    } else {
+      cpSelecionados=cpSelecionados.filter(x=>x!==id);
+    }
+  });
+  atualizarBarraLoteBoletos();
+}
+function limparSelecaoBoletos(){
+  cpSelecionados=[];
+  renderContasPagar();
+}
+function atualizarBarraLoteBoletos(){
+  const bar=document.getElementById('cp-lote-bar');
+  const countEl=document.getElementById('cp-lote-count');
+  if(!bar||!countEl)return;
+  if(cpSelecionados.length>0){
+    bar.style.display='flex';
+    countEl.textContent=cpSelecionados.length;
+  } else {
+    bar.style.display='none';
+  }
+  const checkTodos=document.getElementById('cp-check-todos');
+  const checksLinha=document.querySelectorAll('.cp-check-linha');
+  if(checkTodos){
+    checkTodos.checked=checksLinha.length>0&&Array.from(checksLinha).every(c=>c.checked);
+  }
+}
+function abrirPagamentoLoteBoleto(){
+  if(!cpSelecionados.length){toast('⚠ Selecione ao menos um boleto','#f59e0b');return;}
+  const selecionados=DB.boletos.filter(b=>cpSelecionados.includes(b.id));
+  const total=selecionados.reduce((s,b)=>s+b.valor,0);
+  document.getElementById('mbpl-info').innerHTML=
+    '<div style="font-weight:700">'+selecionados.length+' boleto(s) selecionado(s)</div>'
+    +'<div style="font-size:11px;color:var(--mt);margin-top:4px;max-height:120px;overflow-y:auto">'
+    +selecionados.map(b=>b.forNome+' — '+fmt(b.valor)).join('<br>')
+    +'</div>'
+    +'<div style="font-size:14px;font-weight:700;color:var(--or);margin-top:6px">Total: '+fmt(total)+'</div>';
+  document.getElementById('mbpl-dt').value=dtHtml();
+  document.getElementById('mbpl-obs').value='';
+  document.querySelectorAll('.md').forEach(m=>m.style.display='none');
+  document.getElementById('md-boleto-pag-lote').style.display='block';
+  document.getElementById('mo').style.display='flex';
+}
+function confirmarPagamentoLoteBoleto(){
+  const dt=document.getElementById('mbpl-dt').value;
+  const obs=document.getElementById('mbpl-obs').value;
+  if(!dt){toast('⚠ Informe a data','#f59e0b');return;}
+  if(!cpSelecionados.length){toast('⚠ Nenhum boleto selecionado','#f59e0b');return;}
+  const idsPagar=[...cpSelecionados];
+  DB.boletos=DB.boletos.map(function(b){
+    if(!idsPagar.includes(b.id))return b;
+    return{...b,pago:true,dtPago:dt,valorPago:b.valor,obsPag:obs};
+  });
+  // Salva cada registro individualmente no Firestore, mas faz UM ÚNICO markDirty+saveDB
+  // no final — é isso que evita a espera de salvar boleto por boleto.
+  idsPagar.forEach(function(id){
+    const b=DB.boletos.find(x=>x.id===id);
+    if(b)salvarRegistro('boletos',id,b);
+  });
+  markDirty('fin');saveDB();
+  closeMD('boleto-pag-lote');
+  cpSelecionados=[];
+  renderContasPagar();
+  toast('✓ '+idsPagar.length+' pagamento(s) registrado(s)!','#10b981');
 }
 
 function abrirNovoBoleto(dados){
