@@ -2375,6 +2375,7 @@ function loadDB(){
         return c;
       });
       if(!DB.xmlMemoria)DB.xmlMemoria={}; // chave: "forCNPJ|cProd" → {pid, fator}
+      limparXmlMemoriaAntiga(); // roda uma vez por sessão, remove associações com mais de 12 meses
       if(!DB.config)DB.config={nome:'CONSTRUMAX',end:'',tel:'',cnpj:'',rodape:'Obrigado!',meta:30};
       // Garante campos novos do config que podem estar ausentes em versões antigas
       if(!DB.config.taxas)DB.config.taxas={'cartão crédito':0,'cartão débito':0,'pix':0,'boleto':0};
@@ -2470,6 +2471,28 @@ function inicializarHashesPedidos(){
 
 var _localTimer=null; // debounce do localStorage
 
+// Remove associações antigas (12+ meses) da memória de XML importado. Essa
+// memória só serve para lembrar "produto X da nota do fornecedor Y já foi
+// associado ao produto Z do catálogo" — não precisa ser preservada para
+// sempre; se um fornecedor antigo mandar nota de novo depois de anos, o
+// sistema simplesmente pede pra associar de novo (sem nenhum prejuízo).
+// Roda direto em DB.xmlMemoria (memória), refletindo tanto no cache local
+// quanto no que é sincronizado com a nuvem.
+function limparXmlMemoriaAntiga(){
+  if(!DB.xmlMemoria)return;
+  var corte=new Date();corte.setDate(corte.getDate()-365);
+  var corteISO=corte.toISOString().slice(0,10);
+  var chaves=Object.keys(DB.xmlMemoria);
+  var removidas=0;
+  chaves.forEach(function(k){
+    var entrada=DB.xmlMemoria[k];
+    var dt=entrada&&entrada.dt;
+    if(!dt)return; // sem data registrada, mantém (entrada muito antiga do formato legado)
+    var dtISO=String(dt).indexOf('/')>=0?dt.split('/').reverse().join('-'):dt;
+    if(dtISO<corteISO){delete DB.xmlMemoria[k];removidas++;}
+  });
+  return removidas;
+}
 function saveDB(){
   var ts = Date.now();
   _saveCounter++;
@@ -2485,14 +2508,27 @@ function saveDB(){
     // eles continuam 100% seguros na nuvem e na memória, só não precisam ocupar espaço
     // no "atalho rápido" local, já que o usuário não precisa deles com acesso instantâneo.
     function semExcluidosCache(arr){return(arr||[]).filter(function(r){return!r._excluido;});}
+    // Corte para pedidos EM ABERTO antigos (12 meses): diferente dos pedidos fechados
+    // (pago/cancelado/etc, que já saem do cache com 15/120 dias), pedidos em aberto
+    // continuavam no cache para sempre, não importa a idade — essa é a principal causa
+    // de crescimento contínuo do armazenamento local. Passados 12 meses, mesmo em
+    // aberto, o pedido sai do "atalho rápido" — continua 100% intacto na nuvem e
+    // aparece normalmente ao abrir o sistema (busca automática em segundo plano).
+    var _corteAberto=new Date();_corteAberto.setDate(_corteAberto.getDate()-365);
+    var _corteAbertoISO=_corteAberto.toISOString().slice(0,10);
+    function filtrarPedidosCache(lista,corteFechadoISO){
+      return semExcluidosCache(lista).filter(function(p){
+        var dt=String(p.dtISO||p.dt||'').slice(0,10);if(dt.indexOf('/')>=0)dt=dt.split('/').reverse().join('-');
+        var fechado=['pago','cancelado','mesclado-pago','convertido'].includes(p.st);
+        if(!fechado)return dt>=_corteAbertoISO; // em aberto: só sai do cache se muito antigo (12 meses)
+        return dt>=corteFechadoISO; // fechado: regra de sempre (15 ou 120 dias)
+      });
+    }
     try{
-      // Cache inteligente: só pedidos últimos 15 dias + em aberto (evita estourar 5MB)
+      // Cache inteligente: só pedidos últimos 15 dias + em aberto até 12 meses (evita estourar 5MB)
       var _corte=new Date();_corte.setDate(_corte.getDate()-15);var _corteISO=_corte.toISOString().slice(0,10);
       var _cache=Object.assign({},DB,{
-        pedidos:semExcluidosCache(DB.pedidos).filter(function(p){
-          var dt=String(p.dtISO||p.dt||'').slice(0,10);if(dt.indexOf('/')>=0)dt=dt.split('/').reverse().join('-');
-          return!['pago','cancelado','mesclado-pago','convertido'].includes(p.st)||dt>=_corteISO;
-        }),
+        pedidos:filtrarPedidosCache(DB.pedidos,_corteISO),
         clientes:semExcluidosCache(DB.clientes),
         produtos:semExcluidosCache(DB.produtos),
         fornecedores:semExcluidosCache(DB.fornecedores),
@@ -2513,10 +2549,7 @@ function saveDB(){
         var corte=new Date();corte.setDate(corte.getDate()-120);
         var corteISO=corte.toISOString().slice(0,10);
         var dbReduzido=Object.assign({},DB,{
-          pedidos:semExcluidosCache(DB.pedidos).filter(function(p){
-            var dt=String(p.dtISO||p.dt||'').slice(0,10);
-            return!['pago','cancelado','mesclado-pago','convertido'].includes(p.st)||dt>=corteISO;
-          }),
+          pedidos:filtrarPedidosCache(DB.pedidos,corteISO),
           clientes:semExcluidosCache(DB.clientes),
           produtos:semExcluidosCache(DB.produtos),
           fornecedores:semExcluidosCache(DB.fornecedores),
@@ -3589,14 +3622,20 @@ function renderDashFaturamento(){
   const [anoComp,mesNumComp]=mesCompKey.split('-').map(Number);
   const diasNoMesComp=new Date(anoComp,mesNumComp,0).getDate();
 
-  // Define quantos dias comparar: campo manual > automático (justo)
-  let diasComparar=parseInt(inpDias.value,10);
+  // Dias "automático justo": até hoje se for o mês real atual, senão o mês inteiro
   const diasAutomatico=ehMesRealAtual?hojeReal.getDate():diasNoMesRef;
-  if(!diasComparar||diasComparar<1){
-    diasComparar=diasAutomatico;
+
+  // diasParaAtual: dias considerados para o card PRINCIPAL (mês de referência) —
+  // nunca deve ser cortado pelo tamanho do mês de COMPARAÇÃO, só pelo próprio mês.
+  // Sem essa separação, um mês de referência com 31 dias perdia o dia 31 inteiro
+  // sempre que o mês escolhido para comparar tivesse só 30 (ou menos) dias.
+  let diasParaAtual=parseInt(inpDias.value,10);
+  if(!diasParaAtual||diasParaAtual<1){
+    diasParaAtual=diasAutomatico;
   }
-  // Nunca ultrapassa o menor dos dois meses (evita comparar dia 31 com um mês de 28 dias)
-  diasComparar=Math.min(diasComparar,diasNoMesRef,diasNoMesComp);
+  diasParaAtual=Math.min(diasParaAtual,diasNoMesRef);
+  // Para a COMPARAÇÃO em si (percentual) continuar justa, aí sim limita pelo menor dos dois meses
+  const diasParaComparar=Math.min(diasParaAtual,diasNoMesComp);
 
   function somaPeriodo(mesKey,ateDia){
     return todos.filter(d=>{
@@ -3607,21 +3646,22 @@ function renderDashFaturamento(){
     }).reduce((s,d)=>s+docTotalFil(d,cfm),0);
   }
 
-  const periodoAtual=somaPeriodo(mesRefKey,diasComparar);
-  const periodoAnterior=somaPeriodo(mesCompKey,diasComparar);
+  const periodoAtual=somaPeriodo(mesRefKey,diasParaAtual);
+  const periodoAtualComparavel=somaPeriodo(mesRefKey,diasParaComparar);
+  const periodoAnterior=somaPeriodo(mesCompKey,diasParaComparar);
   const [anoRefLbl,mesRefLbl]=mesRefKey.split('-');
   const [anoCompLbl,mesCompLbl]=mesCompKey.split('-');
-  const labelComparativo=`dias 1–${diasComparar} · ${nomesMes[parseInt(mesCompLbl,10)-1]}/${anoCompLbl} vs ${nomesMes[parseInt(mesRefLbl,10)-1]}/${anoRefLbl}`;
+  const labelComparativo=`dias 1–${diasParaComparar} · ${nomesMes[parseInt(mesCompLbl,10)-1]}/${anoCompLbl} vs ${nomesMes[parseInt(mesRefLbl,10)-1]}/${anoRefLbl}`;
 
   const maxV=Math.max(...periodos.map(p=>p.total),1);
   const melhor=periodos.reduce((m,p)=>p.total>m.total?p:m,periodos[0]||{total:0,label:''});
-  const variacao=periodoAnterior>0?((periodoAtual-periodoAnterior)/periodoAnterior*100):(periodoAtual>0?100:0);
+  const variacao=periodoAnterior>0?((periodoAtualComparavel-periodoAnterior)/periodoAnterior*100):(periodoAtualComparavel>0?100:0);
   const subiu=variacao>=0;
 
   // Resumo (cards de comparativo)
   document.getElementById('dash-fat-resumo').innerHTML=`
     <div style="background:var(--card2);border-radius:10px;padding:10px 14px;flex:1;min-width:150px">
-      <div style="font-size:10.5px;color:var(--mt)">${nomesMes[parseInt(mesRefLbl,10)-1]}/${anoRefLbl} (dias 1–${diasComparar})</div>
+      <div style="font-size:10.5px;color:var(--mt)">${nomesMes[parseInt(mesRefLbl,10)-1]}/${anoRefLbl} (dias 1–${diasParaAtual})</div>
       <div style="font-size:18px;font-weight:800;color:var(--tx)">${fmt(periodoAtual)}</div>
     </div>
     <div style="background:var(--card2);border-radius:10px;padding:10px 14px;flex:1;min-width:150px">
@@ -3845,8 +3885,8 @@ function renderFichaCliente(id,filtSt){
     if(filtro==='pago')   return d.tipo==='ped'&&docSaldo(d)<=0&&d.st!=='cancelado';
     return true;
   });
-  const total=todosOsPeds.filter(d=>isAtivo(d)&&d.tipo==='ped').reduce((s,d)=>s+d.total,0);
-  const lucro=todosOsPeds.filter(d=>isAtivo(d)&&d.tipo==='ped').reduce((s,d)=>s+docLucroFil(d,'com'),0);
+  const total=todosOsPeds.filter(d=>isAtivoFat(d)&&d.tipo==='ped').reduce((s,d)=>s+d.total,0);
+  const lucro=todosOsPeds.filter(d=>isAtivoFat(d)&&d.tipo==='ped').reduce((s,d)=>s+docLucroFil(d,'com'),0);
   const aRec=todosOsPeds.filter(d=>isAtivo(d)&&d.tipo==='ped'&&docSaldo(d)>0).reduce((s,d)=>s+docSaldo(d),0);
   const credAberto=DB.devolucoes.filter(d=>d.cliId===id&&d.creditoStatus==='aberto').reduce((s,d)=>s+d.valorTotal,0);
   const rec=calcRecorrencia(id);
@@ -6780,7 +6820,7 @@ function verClientesPar(parid){
   // Clientes via indicadores array OU pedidos com parceiroId direto
   const clientes=(DB.clientes||[]).filter(c=>(c.indicadores||[]).includes(parid));
   const pedsDiretos=DB.pedidos.filter(function(d){
-    if(d.tipo!=='ped'||!isAtivo(d)||d.parceiroId!==parid)return false;
+    if(d.tipo!=='ped'||!isAtivoFat(d)||d.parceiroId!==parid)return false;
     if(clientes.find(c=>c.id===d.cliId))return false; // evita duplicar
     return true;
   });
@@ -6790,7 +6830,7 @@ function verClientesPar(parid){
   const base=par.base||'lucro';
   const rows=todos.map(function(c){
     const peds=DB.pedidos.filter(function(d){
-      if(d.tipo!=='ped'||!isAtivo(d)||d.cliId!==c.id)return false;
+      if(d.tipo!=='ped'||!isAtivoFat(d)||d.cliId!==c.id)return false;
       if(ini&&(d.dtISO||'')<ini)return false;
       if(fim&&(d.dtISO||'')>fim+'T23:59:59')return false;
       return true;
@@ -6897,7 +6937,7 @@ function renderParceiros(){
     const cliIds=new Set(clientes.map(c=>c.id));
     // Pedidos: via cliente OU parceiroId direto no pedido
     const peds=DB.pedidos.filter(function(d){
-      if(d.tipo!=='ped'||!isAtivo(d))return false;
+      if(d.tipo!=='ped'||!isAtivoFat(d))return false;
       if(ini&&(d.dtISO||'')<ini)return false;
       if(fim&&(d.dtISO||'')>fim+'T23:59:59')return false;
       return cliIds.has(d.cliId)||(d.parceiroId===par.id);
@@ -8954,7 +8994,7 @@ function renderRelDespesas(){
 
   // Faturamento no período
   const pedsFil=DB.pedidos.filter(function(d){
-    if(d.tipo!=='ped'||!isAtivo(d))return false;
+    if(d.tipo!=='ped'||!isAtivoFat(d))return false;
     if(ini&&(d.dtISO||'')<ini)return false;
     if(fim&&(d.dtISO||'')>fim+'T23:59:59')return false;
     return true;
@@ -9638,7 +9678,7 @@ function delCampanha(id){
 function calcCampanhaVendas(c){
   const ini=c.iniISO;const fim=c.fimISO;
   const peds=DB.pedidos.filter(function(d){
-    if(d.tipo!=='ped'||!isAtivo(d))return false;
+    if(d.tipo!=='ped'||!isAtivoFat(d))return false;
     if(ini&&(d.dtISO||'')<ini)return false;
     if(fim&&(d.dtISO||'')>fim+'T23:59:59')return false;
     return true;
@@ -9656,7 +9696,7 @@ function calcCampanhaVendas(c){
     const antesIni=new Date(new Date(ini)-dias*24*60*60*1000).toISOString().slice(0,10);
     const antesFim=new Date(new Date(ini)-1000).toISOString().slice(0,10);
     fatAntes=DB.pedidos.filter(function(d){
-      if(d.tipo!=='ped'||!isAtivo(d))return false;
+      if(d.tipo!=='ped'||!isAtivoFat(d))return false;
       return(d.dtISO||'')>=antesIni&&(d.dtISO||'')<=antesFim+'T23:59:59';
     }).reduce(function(s,d){return s+d.total;},0);
   }
@@ -9995,10 +10035,14 @@ function renderMarketing(){
 function renderFinanceiro(){
   const fil=document.getElementById('fin-fil')?.value||'';
   const vendas=DB.pedidos.filter(d=>d.tipo==='ped'&&isAtivo(d));
-  const totalB=vendas.reduce((s,d)=>s+d.total,0);
+  // Base separada para Faturamento/Lucro: inclui pedidos originais absorvidos por
+  // mesclagem (com suas datas corretas) e exclui o pedido resultado da mesclagem,
+  // para não contar o mesmo valor duas vezes nem perder o mês de origem.
+  const vendasFat=DB.pedidos.filter(d=>d.tipo==='ped'&&isAtivoFat(d));
+  const totalB=vendasFat.reduce((s,d)=>s+d.total,0);
   // Faturamento líquido: desconta taxas por forma de pagamento
-  const totalLiq=vendas.reduce((s,d)=>s+d.total*fatorLiquidoPag(d.pag),0);
-  const totalL=vendas.reduce((s,d)=>s+docLucroFil(d,'com'),0);
+  const totalLiq=vendasFat.reduce((s,d)=>s+d.total*fatorLiquidoPag(d.pag),0);
+  const totalL=vendasFat.reduce((s,d)=>s+docLucroFil(d,'com'),0);
   const totalTaxas=totalB-totalLiq;
   const mg=totalLiq>0?(totalL/totalLiq)*100:0;
   const aRec=vendas.filter(d=>isAtivo(d)&&docSaldo(d)>0).reduce((s,d)=>s+docSaldo(d),0);
@@ -10012,7 +10056,7 @@ function renderFinanceiro(){
     {l:'A Receber',v:fmt(aRec),c:'#3b82f6'},
     {l:'Total Recebido',v:fmt(totalPago),c:'#10b981'},
   ].map(k=>`<div class="kpi"><div class="kv" style="color:${k.c}">${k.v}</div><div class="kl">${k.l}</div>${k.s?`<div class="ks" style="color:#ef4444">${k.s}</div>`:''}</div>`).join('');
-  const pm={};vendas.forEach(d=>{pm[d.pag]=(pm[d.pag]||0)+d.total;});
+  const pm={};vendasFat.forEach(d=>{pm[d.pag]=(pm[d.pag]||0)+d.total;});
   document.getElementById('fin-pags').innerHTML=Object.entries(pm).sort((a,b)=>b[1]-a[1]).map(([k,v])=>{
     const pct=totalB>0?(v/totalB)*100:0;
     return`<div style="margin-bottom:9px"><div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px"><span style="text-transform:capitalize">${k}</span><span style="font-weight:700">${fmt(v)} (${pct.toFixed(0)}%)</span></div><div class="bt"><div class="bf" style="width:${pct}%;background:linear-gradient(90deg,#a78bfa,#7c3aed)"></div></div></div>`;
@@ -12298,7 +12342,7 @@ function gerarRelatorioDiaPNG(){
       return true;
     });
   }
-  const pedsFat = docs.filter(function(d){return d.tipo==='ped'&&isAtivo(d);});
+  const pedsFat = docs.filter(function(d){return d.tipo==='ped'&&isAtivoFat(d);});
   const totalV  = pedsFat.reduce(function(s,d){return s+docTotalFil(d,cfm);},0);
   const totalL  = pedsFat.reduce(function(s,d){return s+docLucroFil(d,cfm);},0);
   const mg      = totalV>0?(totalL/totalV)*100:0;
