@@ -2493,6 +2493,66 @@ function limparXmlMemoriaAntiga(){
   });
   return removidas;
 }
+// Salva o cache local (localStorage) de forma protegida: remove excluídos,
+// aplica a escada de fallback por idade (cada nível mais restritivo que o
+// anterior) e atualiza a barra de aviso conforme o resultado. Usar SEMPRE
+// esta função em vez de localStorage.setItem(KEY, ...) direto — uma escrita
+// direta ignora toda a proteção e pode estourar a cota do navegador sozinha,
+// mesmo que saveDB() esteja protegido.
+function salvarCacheLocalSeguro(){
+  function semExcluidosCache(arr){return(arr||[]).filter(function(r){return!r._excluido;});}
+  function filtrarPedidosCache(lista,diasFechado,diasAberto){
+    var corteFechado=new Date();corteFechado.setDate(corteFechado.getDate()-diasFechado);
+    var corteFechadoISO=corteFechado.toISOString().slice(0,10);
+    var corteAberto=new Date();corteAberto.setDate(corteAberto.getDate()-diasAberto);
+    var corteAbertoISO=corteAberto.toISOString().slice(0,10);
+    return semExcluidosCache(lista).filter(function(p){
+      var dt=String(p.dtISO||p.dt||'').slice(0,10);if(dt.indexOf('/')>=0)dt=dt.split('/').reverse().join('-');
+      var fechado=['pago','cancelado','mesclado-pago','convertido'].includes(p.st);
+      return fechado?dt>=corteFechadoISO:dt>=corteAbertoISO;
+    });
+  }
+  function tentarSalvar(diasFechado,diasAberto){
+    var _cache=Object.assign({},DB,{
+      pedidos:filtrarPedidosCache(DB.pedidos,diasFechado,diasAberto),
+      clientes:semExcluidosCache(DB.clientes),
+      produtos:semExcluidosCache(DB.produtos),
+      fornecedores:semExcluidosCache(DB.fornecedores),
+      boletos:semExcluidosCache(DB.boletos),
+      despesas:semExcluidosCache(DB.despesas),
+      devolucoes:semExcluidosCache(DB.devolucoes),
+      parceiros:semExcluidosCache(DB.parceiros),
+      tarefas:semExcluidosCache(DB.tarefas),
+      entradas:semExcluidosCache(DB.entradas)
+    });
+    localStorage.setItem(KEY, JSON.stringify(_cache));
+  }
+  var niveis=[
+    {fechado:15,aberto:90},
+    {fechado:7, aberto:30},
+    {fechado:3, aberto:10}
+  ];
+  var sucesso=false;
+  for(var i=0;i<niveis.length;i++){
+    try{
+      tentarSalvar(niveis[i].fechado,niveis[i].aberto);
+      localStorage.setItem(KEY+'_ts', String(Date.now()));
+      sucesso=true;
+      break;
+    }catch(e){/* tenta o próximo nível, mais restritivo */}
+  }
+  if(sucesso){
+    window._localStorageCheio=false;
+    var _avisoCheio=document.getElementById('storage-cheio-bar');
+    if(_avisoCheio)_avisoCheio.style.display='none';
+  }else{
+    window._localStorageCheio=true;
+    if(typeof cmxLog==='function')cmxLog('ERRO','Armazenamento local cheio — cache nao atualizado (Firebase continua normal)','');
+    var bar=document.getElementById('storage-cheio-bar');
+    if(bar)bar.style.display='block';
+  }
+  return sucesso;
+}
 function saveDB(){
   var ts = Date.now();
   _saveCounter++;
@@ -2504,69 +2564,7 @@ function saveDB(){
   if(_localTimer) clearTimeout(_localTimer);
   _localTimer=setTimeout(function(){
     _localTimer=null;
-    // Remove registros já excluídos (soft-delete) do cache local em TODAS as coleções —
-    // eles continuam 100% seguros na nuvem e na memória, só não precisam ocupar espaço
-    // no "atalho rápido" local, já que o usuário não precisa deles com acesso instantâneo.
-    function semExcluidosCache(arr){return(arr||[]).filter(function(r){return!r._excluido;});}
-    function filtrarPedidosCache(lista,diasFechado,diasAberto){
-      var corteFechado=new Date();corteFechado.setDate(corteFechado.getDate()-diasFechado);
-      var corteFechadoISO=corteFechado.toISOString().slice(0,10);
-      var corteAberto=new Date();corteAberto.setDate(corteAberto.getDate()-diasAberto);
-      var corteAbertoISO=corteAberto.toISOString().slice(0,10);
-      return semExcluidosCache(lista).filter(function(p){
-        var dt=String(p.dtISO||p.dt||'').slice(0,10);if(dt.indexOf('/')>=0)dt=dt.split('/').reverse().join('-');
-        var fechado=['pago','cancelado','mesclado-pago','convertido'].includes(p.st);
-        return fechado?dt>=corteFechadoISO:dt>=corteAbertoISO;
-      });
-    }
-    function tentarSalvar(diasFechado,diasAberto){
-      var _cache=Object.assign({},DB,{
-        pedidos:filtrarPedidosCache(DB.pedidos,diasFechado,diasAberto),
-        clientes:semExcluidosCache(DB.clientes),
-        produtos:semExcluidosCache(DB.produtos),
-        fornecedores:semExcluidosCache(DB.fornecedores),
-        boletos:semExcluidosCache(DB.boletos),
-        despesas:semExcluidosCache(DB.despesas),
-        devolucoes:semExcluidosCache(DB.devolucoes),
-        parceiros:semExcluidosCache(DB.parceiros),
-        tarefas:semExcluidosCache(DB.tarefas),
-        entradas:semExcluidosCache(DB.entradas)
-      });
-      localStorage.setItem(KEY, JSON.stringify(_cache));
-      return _cache.pedidos.length;
-    }
-    // Escada de tentativas, cada uma MAIS RESTRITIVA que a anterior (menos dados) —
-    // ao contrário de uma versão antiga deste código, que piorava em vez de melhorar
-    // no fallback. Nível 1 é o normal do dia a dia; os seguintes só entram em ação
-    // quando o volume real de pedidos em aberto for grande demais para 5MB.
-    var niveis=[
-      {fechado:15,aberto:90},   // padrão: recentes fechados + em aberto ate 3 meses
-      {fechado:7, aberto:30},   // emergencia: mais restritivo
-      {fechado:3, aberto:10}    // critico: so o essencial mais recente
-    ];
-    var sucesso=false;
-    for(var i=0;i<niveis.length;i++){
-      try{
-        tentarSalvar(niveis[i].fechado,niveis[i].aberto);
-        localStorage.setItem(KEY+'_ts', String(ts));
-        sucesso=true;
-        break;
-      }catch(e){/* tenta o próximo nível, mais restritivo */}
-    }
-    if(sucesso){
-      window._localStorageCheio=false;
-      var _avisoCheio=document.getElementById('storage-cheio-bar');
-      if(_avisoCheio)_avisoCheio.style.display='none';
-    }else{
-      // Nem o nível mais restritivo coube — armazenamento local realmente cheio.
-      // Isso NÃO significa perda de dados (o Firebase continua recebendo tudo
-      // normalmente), mas o cache rápido local parou de atualizar. Avisa bem
-      // visível para o usuário não fechar o sistema sem confirmar que sincronizou.
-      window._localStorageCheio=true;
-      cmxLog('ERRO','Armazenamento local cheio — cache nao atualizado (Firebase continua normal)','');
-      var bar=document.getElementById('storage-cheio-bar');
-      if(bar)bar.style.display='block';
-    }
+    salvarCacheLocalSeguro();
   },500);
   // Debounce Firebase 3s (reduzido de 8s para diminuir tempo total de espera)
   if(_nuvemTimer) clearTimeout(_nuvemTimer);
@@ -2735,7 +2733,7 @@ function salvarNaNuvem(ts){
         }
       });
       // Salva DB mesclado no localStorage
-      try{localStorage.setItem(KEY,JSON.stringify(DB));localStorage.setItem(KEY+'_ts',String(timestamp));}catch(e){}
+      salvarCacheLocalSeguro();
       // Recalcula hashes com dados mesclados
       window._lastHashes.clientes=quickHash(JSON.stringify(DB.clientes||[]));
       window._lastHashes.fin=quickHash(JSON.stringify(DB.boletos||[])+JSON.stringify(DB.despesas||[]));
@@ -4139,7 +4137,7 @@ function abrirDoc(tipo){
           if(fbPeds.length>=DB.pedidos.length){
             DB.pedidos=fbPeds;
           }
-          localStorage.setItem(KEY,JSON.stringify(DB));
+          salvarCacheLocalSeguro();
         }catch(e){console.warn('Sync rápido falhou:',e);}
       }
       _abrirDocModal(tipo);
@@ -11886,8 +11884,7 @@ function confirImp(){
   if(impPending.tarefas)DB.tarefas=impPending.tarefas;
   if(impPending.config)DB.config={...DB.config,...impPending.config};
   var ts = Date.now();
-  localStorage.setItem(KEY, JSON.stringify(DB));
-  localStorage.setItem(KEY+'_ts', String(ts));
+  salvarCacheLocalSeguro();
   impPending=null;
   document.getElementById('imp-preview').style.display='none';
   cmxLog('INFO','Backup restaurado','prods='+DB.produtos.length+' peds='+DB.pedidos.length+' clis='+DB.clientes.length);
@@ -12303,7 +12300,7 @@ function syncAntesDe(colecoes, callback){
           if(fbPeds.length>=DB.pedidos.length)DB.pedidos=fbPeds;
         }catch(e){}
       }
-      localStorage.setItem(KEY,JSON.stringify(DB));
+      salvarCacheLocalSeguro();
     })
     .catch(function(e){cmxLog('WARN','syncAntesDe falhou',(e&&e.message)||String(e));})
     .finally(function(){callback();});
@@ -13010,8 +13007,7 @@ function sincronizarNuvem(){
         })(),
         pedidos:     allPeds,
       };
-      localStorage.setItem(KEY,JSON.stringify(DB));
-      localStorage.setItem(KEY+'_ts',String(m.ts||Date.now()));
+      salvarCacheLocalSeguro();
       go(curPg||'dashboard');
       cmxLog('SYNC','Sincronização manual concluída',''+allPeds.length+' pedidos');
       toast('✓ Dados sincronizados da nuvem!','#10b981');
@@ -13089,7 +13085,7 @@ function migrarPedidosTrimestrais(){
       }catch(e){}
     }
     if(mudou){
-      localStorage.setItem(KEY,JSON.stringify(DB));
+      salvarCacheLocalSeguro();
       if(typeof renderDash==='function'){
         if(curPg==='dashboard')renderDash();
         else if(curPg==='pedidos')renderPedidos();
@@ -13192,12 +13188,7 @@ function iniciarAutoBackup(){
     // Flush localStorage debounce para não perder dados ao fechar
     if(_localTimer){clearTimeout(_localTimer);_localTimer=null;}
     try{
-      var _c=new Date();_c.setDate(_c.getDate()-15);var _ci=_c.toISOString().slice(0,10);
-      var _cc=Object.assign({},DB,{pedidos:(DB.pedidos||[]).filter(function(p){
-        var dt=String(p.dtISO||p.dt||'').slice(0,10);if(dt.indexOf('/')>=0)dt=dt.split('/').reverse().join('-');
-        return!['pago','cancelado','mesclado-pago','convertido'].includes(p.st)||dt>=_ci;
-      })});
-      localStorage.setItem(KEY,JSON.stringify(_cc));localStorage.setItem(KEY+'_ts',String(Date.now()));
+      salvarCacheLocalSeguro();
     }catch(e){}
     // Avisa se há dados não salvos no Firebase
     if(_firebaseSavePending){
@@ -13270,8 +13261,7 @@ function iniciarAutoBackup(){
             DB.parceiros=mergeBi(JSON.parse(mo.parceiros||'[]'),DB.parceiros);
           }
           if(m.seq){try{var fbSeq=JSON.parse(m.seq);DB.seq.ped=Math.max(DB.seq.ped||0,fbSeq.ped||0);DB.seq.orc=Math.max(DB.seq.orc||0,fbSeq.orc||0);}catch(e){}}
-          localStorage.setItem(KEY,JSON.stringify(DB));
-          localStorage.setItem(KEY+'_ts',String(tsFirebase));
+          salvarCacheLocalSeguro();
           // Inicializa hashes com dados mesclados
           window._lastHashes={};
           window._lastHashes.clientes=quickHash(JSON.stringify(DB.clientes||[]));
@@ -13413,8 +13403,7 @@ window.auth.onAuthStateChanged(function(user){
               cmxLog('SYNC','Merge pedidos local>firebase','fb='+fbPeds.length+' local='+lcPeds.length+' final='+DB.pedidos.length);
             }
           }
-          localStorage.setItem(KEY,JSON.stringify(DB));
-          localStorage.setItem(KEY+'_ts',String(metaDoc.data().ts||Date.now()));
+          salvarCacheLocalSeguro();
           cmxLog('SYNC','Login: dados carregados',''+DB.pedidos.length+' pedidos, '+DB.clientes.length+' clientes');
           // Inicializa hashes para que o primeiro save não reescreva tudo
           try{
@@ -13478,7 +13467,7 @@ window.auth.onAuthStateChanged(function(user){
           if(doc.exists&&doc.data().data){
             try{
               DB=JSON.parse(doc.data().data);
-              localStorage.setItem(KEY,JSON.stringify(DB));
+              salvarCacheLocalSeguro();
             }catch(ex){}
           } else {
             const local=localStorage.getItem(KEY);
