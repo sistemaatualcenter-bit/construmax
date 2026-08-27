@@ -3439,7 +3439,7 @@ function renderDash(){
   })():`<div style="color:var(--gn);font-size:12.5px;padding:6px 0">✓ Estoque normalizado</div>`;
   // Ranking de clientes
   const cm={};
-  DB.pedidos.filter(d=>d.tipo==='ped'&&isAtivo(d)&&d.cliId&&d.cliId!=='cli-anonimo').forEach(d=>{
+  DB.pedidos.filter(d=>d.tipo==='ped'&&isAtivoFat(d)&&d.cliId&&d.cliId!=='cli-anonimo').forEach(d=>{
     if(!cm[d.cliId])cm[d.cliId]={nome:d.cliNome,total:0,n:0};
     cm[d.cliId].total+=docTotalFil(d,cfm);cm[d.cliId].n++;
   });
@@ -3751,13 +3751,19 @@ function renderClientes(resetPage){
     .slice()
     .sort((a,b)=>a.nome.localeCompare(b.nome,'pt-BR'));
   document.getElementById('cli-cnt').textContent='('+(DB.clientes.length-1)+')';
-  // Pre-calcula totais por cliente (evita O(N*M) dentro do map)
+  // Pre-calcula totais por cliente (evita O(N*M) dentro do map) — mesma base
+  // usada na Ficha do Cliente (isAtivoFat + docTotalFil), para os dois números
+  // baterem entre si em vez de mostrar valores diferentes para o mesmo cliente.
+  const cfm=catFilModo||'com';
   const pedMap={};
+  DB.pedidos.filter(d=>isAtivoFat(d)&&d.tipo==='ped').forEach(function(d){
+    if(!pedMap[d.cliId])pedMap[d.cliId]={total:0,aRec:0,count:0};
+    pedMap[d.cliId].total+=docTotalFil(d,cfm);
+    pedMap[d.cliId].count++;
+  });
   DB.pedidos.filter(d=>isAtivo(d)&&d.tipo==='ped').forEach(function(d){
     if(!pedMap[d.cliId])pedMap[d.cliId]={total:0,aRec:0,count:0};
-    pedMap[d.cliId].total+=d.total;
     pedMap[d.cliId].aRec+=docSaldo(d);
-    pedMap[d.cliId].count++;
   });
   const PAGE_CLI=100;
   const pageAtual=window._cliPage||0;
@@ -3874,8 +3880,9 @@ function renderFichaCliente(id,filtSt){
     if(filtro==='pago')   return d.tipo==='ped'&&docSaldo(d)<=0&&d.st!=='cancelado';
     return true;
   });
-  const total=todosOsPeds.filter(d=>isAtivoFat(d)&&d.tipo==='ped').reduce((s,d)=>s+d.total,0);
-  const lucro=todosOsPeds.filter(d=>isAtivoFat(d)&&d.tipo==='ped').reduce((s,d)=>s+docLucroFil(d,'com'),0);
+  const cfm=catFilModo||'com';
+  const total=todosOsPeds.filter(d=>isAtivoFat(d)&&d.tipo==='ped').reduce((s,d)=>s+docTotalFil(d,cfm),0);
+  const lucro=todosOsPeds.filter(d=>isAtivoFat(d)&&d.tipo==='ped').reduce((s,d)=>s+docLucroFil(d,cfm),0);
   const aRec=todosOsPeds.filter(d=>isAtivo(d)&&d.tipo==='ped'&&docSaldo(d)>0).reduce((s,d)=>s+docSaldo(d),0);
   const credAberto=DB.devolucoes.filter(d=>d.cliId===id&&d.creditoStatus==='aberto').reduce((s,d)=>s+d.valorTotal,0);
   const rec=calcRecorrencia(id);
@@ -4408,7 +4415,7 @@ function getUltimoPrecoClienteProduto(cliId, pid){
   // Busca o último pedido ativo do cliente que contém esse produto
   if(!cliId||!pid)return null;
   const peds = DB.pedidos
-    .filter(d=>d.tipo==='ped'&&isAtivo(d)&&d.cliId===cliId&&(d.itens||[]).some(it=>it.pid===pid))
+    .filter(d=>d.tipo==='ped'&&isAtivoFat(d)&&d.cliId===cliId&&(d.itens||[]).some(it=>it.pid===pid))
     .sort((a,b)=>(b.dtISO||'').localeCompare(a.dtISO||''));
   if(!peds.length)return null;
   const ped = peds[0];
@@ -4906,6 +4913,12 @@ function salvarEntregaVer(id){
   const st=document.getElementById('mver-ent-st')?.value||'a-entregar';
   const obs=document.getElementById('mver-ent-obs')?.value?.trim()||'';
   d.entrega={dtPrevista:dt,end,st,obs,dtEntregue:'',parciais:[]};
+  // Salva o endereço de entrega no cadastro do cliente também — mesma lógica
+  // que já existe ao criar o pedido, para o próximo pedido vir pré-preenchido.
+  if(end&&d.cliId){
+    const cliAtual=DB.clientes.find(c=>c.id===d.cliId);
+    if(cliAtual&&cliAtual.endEntrega!==end){cliAtual.endEntrega=end;markDirty('clientes');}
+  }
   if(d)salvarRegistro('pedidos',d.id,d);
   markDirty('pedidos');saveDB();renderEntregaVer(d);renderEntregas();renderPedidos();
   toast('✓ Entrega adicionada ao '+d.num,'#10b981');
@@ -4941,8 +4954,14 @@ function salvarEdicaoEntregaVer(id){
   d.entrega.end=document.getElementById('mver-ent-end')?.value?.trim()||'';
   d.entrega.st=document.getElementById('mver-ent-st')?.value||'a-entregar';
   d.entrega.obs=document.getElementById('mver-ent-obs')?.value?.trim()||'';
+  // Salva o endereço de entrega no cadastro do cliente também — mesma lógica
+  // usada nos outros pontos de salvar entrega, para o próximo pedido vir pré-preenchido.
+  if(d.entrega.end&&d.cliId){
+    const cliAtual=DB.clientes.find(c=>c.id===d.cliId);
+    if(cliAtual&&cliAtual.endEntrega!==d.entrega.end){cliAtual.endEntrega=d.entrega.end;markDirty('clientes');}
+  }
   if(d)salvarRegistro('pedidos',d.id,d);
-  saveDB();renderEntregaVer(d);renderEntregas();
+  markDirty('pedidos');saveDB();renderEntregaVer(d);renderEntregas();
   toast('✓ Entrega atualizada','#10b981');
 }
 function removerEntregaVer(id){
@@ -6059,7 +6078,7 @@ function renderHistProduto(id){
   const dtAte=document.getElementById('hp-dt-ate')?.value||'';
   // Vendas
   var vendas=[];
-  DB.pedidos.filter(d=>isAtivo(d)).forEach(d=>{
+  DB.pedidos.filter(d=>d.tipo==='ped'&&isAtivoFat(d)).forEach(d=>{
     d.itens.filter(it=>it.pid===id).forEach(it=>{
       vendas.push({num:d.num,dt:d.dt,dtISO:d.dtISO||'',cliNome:d.cliNome,qtd:it.qtd,punit:it.punit});
     });
@@ -6312,8 +6331,8 @@ function iniciarInventario(){
   if(_inventario){
     if(!confirm('Já existe um inventário em andamento.\nIniciar um novo vai descartar a contagem atual. Continuar?'))return;
   }
-  const prods=DB.produtos.filter(function(p){
-    return p.id!=='cli-anonimo'&&(!cat||p.cat===cat);
+  const prods=semExcluidos(DB.produtos).filter(function(p){
+    return(!cat||p.cat===cat);
   }).sort(function(a,b){return(a.cat||'').localeCompare(b.cat||'')||a.nome.localeCompare(b.nome);});
 
   if(!prods.length){toast('⚠ Nenhum produto encontrado','#f59e0b');return;}
@@ -8552,8 +8571,19 @@ function salvarEntrada(){
   nfItens=[];
   markDirty('op');markDirty('produtos');saveDB();closeMD('ent');renderEntradas();renderEstoque();
 }
-function delEntrada(id){if(!confirm('Remover?'))return;DB.entradas=DB.entradas.map(e=>e.id===id?Object.assign({},e,{_excluido:true}):e);deletarRegistro('entradas',id);
-  markDirty('op');saveDB();renderEntradas();toast('Removida','#ef4444');}
+function delEntrada(id){
+  if(!confirm('Remover?'))return;
+  const ent=DB.entradas.find(e=>e.id===id);
+  // Reverte o estoque que essa entrada havia somado — sem isso, excluir uma
+  // entrada deixava o estoque "inflado" para sempre, mesmo com a entrada já
+  // marcada como excluída (o mesmo cuidado que salvarEntrada já tinha na edição).
+  if(ent&&ent.itens){
+    ent.itens.forEach(it=>{
+      DB.produtos=DB.produtos.map(p=>p.id===it.pid?{...p,est:Math.max(0,p.est-it.qtd)}:p);
+    });
+  }
+  DB.entradas=DB.entradas.map(e=>e.id===id?Object.assign({},e,{_excluido:true}):e);deletarRegistro('entradas',id);
+  markDirty('op');markDirty('produtos');saveDB();renderEntradas();renderEstoque();toast('Removida','#ef4444');}
 
 // ═══════════════════════════════════════════════════════
 // FINANCEIRO
@@ -8988,9 +9018,10 @@ function renderRelDespesas(){
     if(fim&&(d.dtISO||'')>fim+'T23:59:59')return false;
     return true;
   });
-  const totalFat=pedsFil.reduce(function(s,d){return s+d.total;},0);
+  const cfm=catFilModo||'com';
+  const totalFat=pedsFil.reduce(function(s,d){return s+docTotalFil(d,cfm);},0);
   const totalDesp=despFil.reduce(function(s,d){return s+d.valor;},0);
-  const lucBruto=pedsFil.reduce(function(s,d){return s+docLucroFil(d,'com');},0);
+  const lucBruto=pedsFil.reduce(function(s,d){return s+docLucroFil(d,cfm);},0);
   const lucLiq=lucBruto-totalDesp;
 
   // KPIs
@@ -10023,15 +10054,18 @@ function renderMarketing(){
 }
 function renderFinanceiro(){
   const fil=document.getElementById('fin-fil')?.value||'';
+  const cfm=catFilModo||'com';
   const vendas=DB.pedidos.filter(d=>d.tipo==='ped'&&isAtivo(d));
   // Base separada para Faturamento/Lucro: inclui pedidos originais absorvidos por
   // mesclagem (com suas datas corretas) e exclui o pedido resultado da mesclagem,
   // para não contar o mesmo valor duas vezes nem perder o mês de origem.
   const vendasFat=DB.pedidos.filter(d=>d.tipo==='ped'&&isAtivoFat(d));
   const totalB=vendasFat.reduce((s,d)=>s+d.total,0);
-  // Faturamento líquido: desconta taxas por forma de pagamento
-  const totalLiq=vendasFat.reduce((s,d)=>s+d.total*fatorLiquidoPag(d.pag),0);
-  const totalL=vendasFat.reduce((s,d)=>s+docLucroFil(d,'com'),0);
+  // Faturamento líquido: mesma definição usada no Dashboard (docTotalFil) —
+  // desconta taxa por forma de pagamento E itens de repasse, para o valor
+  // "líquido" aqui bater exatamente com o "Faturamento" mostrado no Dashboard.
+  const totalLiq=vendasFat.reduce((s,d)=>s+docTotalFil(d,cfm),0);
+  const totalL=vendasFat.reduce((s,d)=>s+docLucroFil(d,cfm),0);
   const totalTaxas=totalB-totalLiq;
   const mg=totalLiq>0?(totalL/totalLiq)*100:0;
   const aRec=vendas.filter(d=>isAtivo(d)&&docSaldo(d)>0).reduce((s,d)=>s+docSaldo(d),0);
@@ -10039,7 +10073,7 @@ function renderFinanceiro(){
   const meta=DB.config.meta||30;
   document.getElementById('fin-kpis').innerHTML=[
     {l:'Faturamento Bruto',v:fmt(totalB),c:'#f97316'},
-    {l:'Faturamento Líquido',v:fmt(totalLiq),c:'#f59e0b',s:totalTaxas>0?'Taxas: -'+fmt(totalTaxas):''},
+    {l:'Faturamento Líquido',v:fmt(totalLiq),c:'#f59e0b',s:totalTaxas>0?'Taxas e repasses: -'+fmt(totalTaxas):''},
     {l:'Lucro Líquido',v:fmt(totalL),c:'#10b981'},
     {l:'Margem',v:fmtP(mg),c:'#a78bfa'},
     {l:'A Receber',v:fmt(aRec),c:'#3b82f6'},
@@ -10076,10 +10110,11 @@ function relLimpar(){
 }
 function calcRecorrencia(cliId){
   const hoje=new Date();hoje.setHours(0,0,0,0);
-  const peds=DB.pedidos.filter(d=>d.tipo==='ped'&&isAtivo(d)&&d.cliId===cliId&&d.cliId!=='cli-anonimo')
+  const cfm=catFilModo||'com';
+  const peds=DB.pedidos.filter(d=>d.tipo==='ped'&&isAtivoFat(d)&&d.cliId===cliId&&d.cliId!=='cli-anonimo')
     .sort((a,b)=>(a.dtISO||a.dt).localeCompare(b.dtISO||b.dt));
   if(!peds.length)return null;
-  const total=peds.reduce((s,d)=>s+d.total,0);
+  const total=peds.reduce((s,d)=>s+docTotalFil(d,cfm),0);
   const numPeds=peds.length;
   // Última compra
   const ultPed=peds[peds.length-1];
@@ -12172,13 +12207,13 @@ function renderTarefas(){
     if(pendentes.length>0){badge.style.display='inline';badge.textContent=pendentes.length+(urgentes>0?' ('+urgentes+' urgente'+(urgentes>1?'s':'')+')':'');}
     else badge.style.display='none';
   }
-  if(!DB.tarefas.length){
+  if(!semExcluidos(DB.tarefas).length){
     lista.innerHTML='<div style="color:var(--mt);font-size:13px;text-align:center;padding:16px 0">Nenhuma tarefa ✓</div>';
     return;
   }
   // Ordem: urgente → normal → baixa, depois concluídas, depois canceladas
   const ordem={urgente:0,normal:1,baixa:2,concluida:3,cancelada:4};
-  const sorted=[...DB.tarefas].sort(function(a,b){
+  const sorted=[...semExcluidos(DB.tarefas)].sort(function(a,b){
     const sa=(a.st==='concluida'?3:a.st==='cancelada'?4:ordem[a.prio]||1);
     const sb=(b.st==='concluida'?3:b.st==='cancelada'?4:ordem[b.prio]||1);
     if(sa!==sb)return sa-sb;
