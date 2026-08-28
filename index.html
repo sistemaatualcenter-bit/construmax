@@ -1433,7 +1433,14 @@ select.inp option{background:var(--card2)}
       <div class="card cp" style="margin-bottom:12px">
         <div style="display:flex;gap:8px;align-items:flex-end">
           <div style="flex:1;position:relative">
-            <div class="fl" style="margin-bottom:3px">Buscar Produto</div>
+            <div class="fl" style="margin-bottom:3px;display:flex;justify-content:space-between;align-items:center;gap:8px">
+              <span>Buscar Produto</span>
+              <button type="button" id="cmd-busca-dinamica-btn" onclick="toggleBuscaDinamicaComanda()"
+                title="Quando ativado, encontra o produto mesmo digitando as palavras fora de ordem ou só parte do nome — ex: &quot;lampada 80&quot; encontra &quot;Lâmpada LED 80W&quot;"
+                style="font-size:10px;padding:3px 9px;border-radius:12px;border:1px solid var(--br);background:transparent;color:var(--mt);cursor:pointer;font-weight:700;white-space:nowrap">
+                🔍 Busca dinâmica
+              </button>
+            </div>
             <input class="inp" id="cmd-prd-src" placeholder="Nome ou código de barras..." oninput="filtProdComanda()" onkeydown="navDropComanda(event)" autocomplete="off" style="font-size:15px">
             <div id="cmd-prd-drop" style="display:none;position:absolute;top:calc(100% + 4px);left:0;width:100%;background:var(--card);border:1px solid var(--br);border-radius:9px;z-index:9999;max-height:280px;overflow-y:auto;box-shadow:0 4px 20px #0003"></div>
           </div>
@@ -12572,6 +12579,20 @@ function onPagComanda(){
   }
 }
 
+// Remove acentos e caixa para comparação de texto mais tolerante (ex: "lampada" == "lâmpada")
+function normTxt(s){return(s||'').toString().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();}
+
+let cmdBuscaDinamica=false; // false = busca exata (frase inteira); true = por palavras, em qualquer ordem/posição
+function toggleBuscaDinamicaComanda(){
+  cmdBuscaDinamica=!cmdBuscaDinamica;
+  const btn=document.getElementById('cmd-busca-dinamica-btn');
+  if(btn){
+    btn.style.background=cmdBuscaDinamica?'var(--pu)':'transparent';
+    btn.style.color=cmdBuscaDinamica?'#fff':'var(--mt)';
+    btn.style.borderColor=cmdBuscaDinamica?'var(--pu)':'var(--br)';
+  }
+  filtProdComanda(); // reaplica a busca atual com o novo modo
+}
 function filtProdComanda(){
   cmdDropIdx=-1;
   const q=document.getElementById('cmd-prd-src').value.trim();
@@ -12587,11 +12608,24 @@ function filtProdComanda(){
     drop.style.display='none';
     return;
   }
-  // Busca por nome ou código (não barras parcial)
-  const res=semExcluidos(DB.produtos).filter(p=>
-    p.nome.toLowerCase().includes(ql)||
-    (p.cod||'').toLowerCase().includes(ql)
-  ).slice(0,30);
+  // Busca por nome ou código — dois modos:
+  //  • padrão: a frase digitada precisa aparecer inteira e em ordem no nome
+  //  • dinâmica: cada PALAVRA digitada precisa aparecer em algum lugar do nome,
+  //    em qualquer ordem, ignorando acentos (ex: "lampada 80" acha "Lâmpada 80W")
+  let res;
+  if(cmdBuscaDinamica){
+    const palavras=normTxt(q).split(/\s+/).filter(Boolean);
+    res=semExcluidos(DB.produtos).filter(p=>{
+      const nomeNorm=normTxt(p.nome);
+      const codNorm=normTxt(p.cod||'');
+      return palavras.every(w=>nomeNorm.includes(w)||codNorm.includes(w));
+    }).slice(0,30);
+  }else{
+    res=semExcluidos(DB.produtos).filter(p=>
+      p.nome.toLowerCase().includes(ql)||
+      (p.cod||'').toLowerCase().includes(ql)
+    ).slice(0,30);
+  }
   if(!res.length){drop.style.display='none';return;}
   drop.style.display='block';
   drop.innerHTML=res.map((p,i)=>`<div data-pid="${p.id}" data-idx="${i}" style="padding:9px 13px;cursor:pointer;font-size:13px;border-bottom:1px solid var(--br2)">
