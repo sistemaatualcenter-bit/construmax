@@ -2671,13 +2671,32 @@ function salvarNaNuvem(ts){
     }
   }
   // pedidos (verifica TODOS os meses por hash — evita bug de marcar o mês errado)
+  // Cada mês pode ultrapassar o limite de 1MB por documento do Firestore em
+  // lojas com alto volume — por isso divide por TAMANHO REAL (não por contagem
+  // fixa, já que pedidos variam muito de tamanho entre si) em pedaços seguros
+  // de até 700KB, criando pedidos_AAAA_MM, pedidos_AAAA_MM_2, pedidos_AAAA_MM_3...
   if(dirty.all||dirty.pedidos){
-    Object.keys(pedsByQ).forEach(function(k){
-      var pedStr=JSON.stringify(pedsByQ[k]);
-      var h=quickHash(pedStr);
-      if(h!==(window._lastHashes['ped_'+k]||'')){
-        writes.push({ref:col.doc(k),data:{ts:timestamp,pedidos:pedStr},name:k,mergeFields:['pedidos'],hash:'ped_'+k,hashVal:h});
+    var LIMITE_CHUNK_BYTES=700000;
+    Object.keys(pedsByQ).forEach(function(mesKey){
+      var lista=pedsByQ[mesKey];
+      var chunks=[];
+      var atual=[];var atualBytes=0;
+      for(var i=0;i<lista.length;i++){
+        var tamPed=JSON.stringify(lista[i]).length;
+        if(atual.length&&atualBytes+tamPed>LIMITE_CHUNK_BYTES){
+          chunks.push(atual);atual=[];atualBytes=0;
+        }
+        atual.push(lista[i]);atualBytes+=tamPed;
       }
+      if(atual.length||!chunks.length)chunks.push(atual);
+      chunks.forEach(function(chunk,idx){
+        var key=idx===0?mesKey:mesKey+'_'+(idx+1);
+        var pedStr=JSON.stringify(chunk);
+        var h=quickHash(pedStr);
+        if(h!==(window._lastHashes['ped_'+key]||'')){
+          writes.push({ref:col.doc(key),data:{ts:timestamp,pedidos:pedStr},name:key,mergeFields:['pedidos'],hash:'ped_'+key,hashVal:h});
+        }
+      });
     });
   }
   // Se só meta (nada mudou), cancela
@@ -2746,7 +2765,7 @@ function salvarNaNuvem(ts){
       window._lastHashes.fin=quickHash(JSON.stringify(DB.boletos||[])+JSON.stringify(DB.despesas||[]));
       window._lastHashes.op=quickHash(JSON.stringify(DB.fornecedores||[])+JSON.stringify(DB.entradas||[]).slice(0,200));
       var _pc=DB.produtos||[];
-      for(var _i=0;_i<Math.ceil(_pc.length/2000)||1;_i++){
+      for(var _i=0;_i<(Math.ceil(_pc.length/2000)||1);_i++){
         window._lastHashes['prod_'+_i]=quickHash(JSON.stringify(_pc.slice(_i*2000,(_i+1)*2000)));
       }
       // Atualiza hash de cada mês de pedidos que acabou de ser escrito
@@ -13035,7 +13054,7 @@ function sincronizarNuvem(){
     var monthlyPeds=[], legacyPeds=[];
     snapshot.forEach(function(d){
       docs[d.id]=d;
-      if(/^pedidos_\d{4}_\d{2}$/.test(d.id)){
+      if(/^pedidos_\d{4}_\d{2}(_\d+)?$/.test(d.id)){
         try{monthlyPeds=monthlyPeds.concat(JSON.parse(d.data().pedidos||'[]'));}catch(e){}
       } else if(d.id==='pedidos1'||d.id==='pedidos2'){
         try{legacyPeds=legacyPeds.concat(JSON.parse(d.data().pedidos||'[]'));}catch(e){}
@@ -13095,7 +13114,7 @@ function migrarPedidosTrimestrais(){
   col.get().then(function(snapshot){
     var monthlyDocs=[], quarterlyDocs=[], metaCli=null, metaFin=null, metaOp=null;
     snapshot.forEach(function(doc){
-      if(/^pedidos_\d{4}_\d{2}$/.test(doc.id)) monthlyDocs.push(doc);
+      if(/^pedidos_\d{4}_\d{2}(_\d+)?$/.test(doc.id)) monthlyDocs.push(doc);
       else if(/^pedidos_\d{4}_Q\d$/.test(doc.id)) quarterlyDocs.push(doc);
       if(doc.id==='meta_clientes') metaCli=doc;
       if(doc.id==='meta_fin')      metaFin=doc;
@@ -13291,7 +13310,7 @@ function iniciarAutoBackup(){
           var D={};var monthlyPeds=[],legacyPeds=[];
           snapshot.forEach(function(doc){
             D[doc.id]=doc;
-            if(/^pedidos_\d{4}_\d{2}$/.test(doc.id)){
+            if(/^pedidos_\d{4}_\d{2}(_\d+)?$/.test(doc.id)){
               try{monthlyPeds=monthlyPeds.concat(JSON.parse(doc.data().pedidos||'[]'));}catch(e){}
             } else if(doc.id==='pedidos1'||doc.id==='pedidos2'){
               try{legacyPeds=legacyPeds.concat(JSON.parse(doc.data().pedidos||'[]'));}catch(e){}
@@ -13337,7 +13356,7 @@ function iniciarAutoBackup(){
           window._lastHashes.fin=quickHash(JSON.stringify(DB.boletos||[])+JSON.stringify(DB.despesas||[]));
           window._lastHashes.op=quickHash(JSON.stringify(DB.fornecedores||[])+JSON.stringify(DB.entradas||[]).slice(0,200));
           var _pc=DB.produtos||[];
-          for(var _i=0;_i<Math.ceil(_pc.length/2000)||1;_i++){
+          for(var _i=0;_i<(Math.ceil(_pc.length/2000)||1);_i++){
             window._lastHashes['prod_'+_i]=quickHash(JSON.stringify(_pc.slice(_i*2000,(_i+1)*2000)));
           }
           inicializarHashesPedidos();
@@ -13404,7 +13423,7 @@ window.auth.onAuthStateChanged(function(user){
       var monthlyPeds=[], legacyPeds=[];
       snapshot.forEach(function(doc){
         D[doc.id]=doc;
-        if(/^pedidos_\d{4}_\d{2}$/.test(doc.id)){
+        if(/^pedidos_\d{4}_\d{2}(_\d+)?$/.test(doc.id)){
           try{monthlyPeds=monthlyPeds.concat(JSON.parse(doc.data().pedidos||'[]'));}catch(e){}
         } else if(doc.id==='pedidos1'||doc.id==='pedidos2'){
           try{legacyPeds=legacyPeds.concat(JSON.parse(doc.data().pedidos||'[]'));}catch(e){}
@@ -13484,7 +13503,7 @@ window.auth.onAuthStateChanged(function(user){
             var _fStr=JSON.stringify(DB.fornecedores||[]),_eStr=JSON.stringify(DB.entradas||[]).slice(0,200);
             window._lastHashes.op=quickHash(_fStr+_eStr);
             var _pc=DB.produtos||[];
-            for(var _i=0;_i<Math.ceil(_pc.length/2000)||1;_i++){
+            for(var _i=0;_i<(Math.ceil(_pc.length/2000)||1);_i++){
               window._lastHashes['prod_'+_i]=quickHash(JSON.stringify(_pc.slice(_i*2000,(_i+1)*2000)));
             }
             inicializarHashesPedidos();
