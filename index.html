@@ -2886,6 +2886,115 @@ function isAtivo(d){return!d._excluido&&!['cancelado','mesclado','mesclado-abert
 // mesclagem (_ehMesclagem) para não contar o mesmo valor duas vezes. Não usar
 // para saldo devedor/"A Receber" — nesse caso use isAtivo() normal, pois a
 // cobrança da dívida passa a ser feita pelo pedido mesclado, não pelos originais.
+// Merge seguro de pedidos entre duas fontes (local e nuvem): nunca perde um
+// pagamento que exista em qualquer uma das duas versões. Pedidos que só
+// existem de um lado são preservados; pedidos que existem nos dois lados têm
+// seus pagamentos UNIDOS (não substituídos) — evita que um pagamento recém
+// registrado localmente, ainda não sincronizado, seja apagado por um merge
+// que traga uma versão mais antiga do mesmo pedido vinda da nuvem.
+// Agrupa pagamentos por "assinatura" (data+valor+forma+obs) e mantém, para
+// cada assinatura, o MAIOR número de repetições entre local e nuvem —
+// preserva pagamentos genuinamente repetidos (ex: dois pagamentos idênticos
+// de R$50 no mesmo dia) sem duplicá-los quando já sincronizados, e sem
+// perder um pagamento novo que só exista de um dos lados. Compartilhada
+// entre pedidos e parceiros (comissões), que têm a mesma estrutura de risco.
+function unirPagamentosSeguro(pagLocal,pagFb){
+  function agrupar(lista){
+    var g={};
+    (lista||[]).forEach(function(p){
+      var chave=(p.dtISO||p.dt||'')+'|'+p.valor+'|'+p.forma+'|'+(p.obs||'');
+      if(!g[chave])g[chave]=[];
+      g[chave].push(p);
+    });
+    return g;
+  }
+  var gLocal=agrupar(pagLocal),gFb=agrupar(pagFb);
+  var todasChaves={};
+  Object.keys(gLocal).forEach(function(k){todasChaves[k]=true;});
+  Object.keys(gFb).forEach(function(k){todasChaves[k]=true;});
+  var unidos=[];
+  Object.keys(todasChaves).forEach(function(chave){
+    var listaLocal=gLocal[chave]||[],listaFb=gFb[chave]||[];
+    unidos=unidos.concat(listaLocal.length>=listaFb.length?listaLocal:listaFb);
+  });
+  return unidos;
+}
+function mergePedidosSeguro(fbArr,localArr){
+  var map={};
+  (localArr||[]).forEach(function(r){if(r&&r.id)map[r.id]=r;});
+  (fbArr||[]).forEach(function(r){
+    if(!r||!r.id)return;
+    var local=map[r.id];
+    if(!local){map[r.id]=r;return;}
+    map[r.id]=Object.assign({},r,{pagamentos:unirPagamentosSeguro(local.pagamentos,r.pagamentos)});
+  });
+  return Object.values(map);
+}
+// Comissões de parceiro: mesma estrutura de risco que pedidos (array de
+// pagamentos que só deveria crescer) — usa o mesmo merge por união.
+function mergeParceirosSeguro(fbArr,localArr){
+  var map={};
+  (localArr||[]).forEach(function(r){if(r&&r.id)map[r.id]=r;});
+  (fbArr||[]).forEach(function(r){
+    if(!r||!r.id)return;
+    var local=map[r.id];
+    if(!local){map[r.id]=r;return;}
+    map[r.id]=Object.assign({},r,{pagamentos:unirPagamentosSeguro(local.pagamentos,r.pagamentos)});
+  });
+  return Object.values(map);
+}
+// Para registros com um campo de "estado que só avança" (ex: pago, ou
+// creditoStatus de devolução): nunca deixa um merge REVERTER esse estado
+// para trás. Se qualquer um dos dois lados já mostra o estado "concluído",
+// o resultado mantém concluído — evita, por exemplo, que um crédito de
+// devolução já usado volte a aparecer como disponível (double-spend) ou
+// que um boleto já pago volte a aparecer como pendente.
+function mergeComEstadoSeguro(fbArr,localArr,campoEstado,valorConcluido){
+  var map={};
+  (localArr||[]).forEach(function(r){if(r&&r.id)map[r.id]=r;});
+  (fbArr||[]).forEach(function(r){
+    if(!r||!r.id)return;
+    var local=map[r.id];
+    if(!local){map[r.id]=r;return;}
+    var localConcluido=local[campoEstado]===valorConcluido;
+    var fbConcluido=r[campoEstado]===valorConcluido;
+    // Se qualquer um dos dois já concluiu, o resultado usa a versão que
+    // está concluída (preferindo a local se ambos, para manter outros
+    // campos — como dtPago/valorPago — mais recentes editados localmente).
+    if(localConcluido||fbConcluido){
+      map[r.id]=localConcluido?local:r;
+    }else{
+      map[r.id]=r; // nenhum concluído ainda: comportamento anterior (nuvem mais recente)
+    }
+  });
+  return Object.values(map);
+}
+// Para registros de campos simples sem "estado que só avança" nem array
+// acumulativo (clientes, fornecedores, entradas): reduz o risco de reverter
+// uma edição local recente preenchendo, campo a campo, com o valor NÃO
+// VAZIO — se um lado tem um campo preenchido e o outro está vazio/nulo,
+// usa o preenchido. Não resolve 100% (não sabemos qual edição é mais
+// recente sem timestamp por campo), mas evita o caso mais comum de perda:
+// um campo que só existe de um dos lados sendo apagado pelo outro.
+function mergeCamposSeguro(fbArr,localArr){
+  var map={};
+  (localArr||[]).forEach(function(r){if(r&&r.id)map[r.id]=r;});
+  (fbArr||[]).forEach(function(r){
+    if(!r||!r.id)return;
+    var local=map[r.id];
+    if(!local){map[r.id]=r;return;}
+    var combinado=Object.assign({},r);
+    Object.keys(local).forEach(function(campo){
+      var valLocal=local[campo],valFb=r[campo];
+      var fbVazio=valFb===undefined||valFb===null||valFb==='';
+      if(fbVazio&&!(valLocal===undefined||valLocal===null||valLocal==='')){
+        combinado[campo]=valLocal;
+      }
+    });
+    map[r.id]=combinado;
+  });
+  return Object.values(map);
+}
 function isAtivoFat(d){
   // Identifica pedido resultado de mesclagem tanto pela marca nova (_ehMesclagem,
   // presente em mesclagens feitas após esta correção) quanto pelo texto padrão
@@ -4161,14 +4270,14 @@ function abrirDoc(tipo){
           if(m.clientes){
             var sc=JSON.parse(m.clientes||'[]');
             // Só substitui se Firebase tem >= clientes (proteção anti-perda)
-            if(sc.length>=DB.clientes.length) DB.clientes=sc;
+            if(sc.length>=DB.clientes.length) DB.clientes=mergeCamposSeguro(sc,DB.clientes);
           }
           if(m.seq){const s=JSON.parse(m.seq);DB.seq=s;}
           const p1=ped1Doc.exists?JSON.parse(ped1Doc.data().pedidos||'[]'):[];
           const p2=ped2Doc.exists?JSON.parse(ped2Doc.data().pedidos||'[]'):[];
           const fbPeds=[...p1,...p2];
           if(fbPeds.length>=DB.pedidos.length){
-            DB.pedidos=fbPeds;
+            DB.pedidos=mergePedidosSeguro(fbPeds,DB.pedidos);
           }
           salvarCacheLocalSeguro();
         }catch(e){console.warn('Sync rápido falhou:',e);}
@@ -12336,12 +12445,12 @@ function syncAntesDe(colecoes, callback){
         try{
           const m=metaDoc.data();
           // Proteção por contagem em todas as coleções
-          if(m.clientes){const v=JSON.parse(m.clientes||'[]');if(v.length>=DB.clientes.length)DB.clientes=v;}
+          if(m.clientes){const v=JSON.parse(m.clientes||'[]');if(v.length>=DB.clientes.length)DB.clientes=mergeCamposSeguro(v,DB.clientes);}
           if(m.seq)DB.seq=JSON.parse(m.seq||'{}');
-          if(m.parceiros){const v=JSON.parse(m.parceiros||'[]');if(v.length>=DB.parceiros.length)DB.parceiros=v;}
-          if(m.fornecedores){const v=JSON.parse(m.fornecedores||'[]');if(v.length>=DB.fornecedores.length)DB.fornecedores=v;}
-          if(m.despesas){const v=JSON.parse(m.despesas||'[]');if(v.length>=DB.despesas.length)DB.despesas=v;}
-          if(m.boletos){const v=JSON.parse(m.boletos||'[]');if(v.length>=DB.boletos.length)DB.boletos=v;}
+          if(m.parceiros){const v=JSON.parse(m.parceiros||'[]');if(v.length>=DB.parceiros.length)DB.parceiros=mergeParceirosSeguro(v,DB.parceiros);}
+          if(m.fornecedores){const v=JSON.parse(m.fornecedores||'[]');if(v.length>=DB.fornecedores.length)DB.fornecedores=mergeCamposSeguro(v,DB.fornecedores);}
+          if(m.despesas){const v=JSON.parse(m.despesas||'[]');if(v.length>=DB.despesas.length)DB.despesas=mergeComEstadoSeguro(v,DB.despesas,'pago',true);}
+          if(m.boletos){const v=JSON.parse(m.boletos||'[]');if(v.length>=DB.boletos.length)DB.boletos=mergeComEstadoSeguro(v,DB.boletos,'pago',true);}
           if(m.config)DB.config=JSON.parse(m.config||'{}');
         }catch(e){cmxLog('WARN','syncAntesDe meta erro',e.message);}
       }
@@ -12358,7 +12467,7 @@ function syncAntesDe(colecoes, callback){
           const arr1=p1&&p1.exists?JSON.parse(p1.data().pedidos||'[]'):[];
           const arr2=p2&&p2.exists?JSON.parse(p2.data().pedidos||'[]'):[];
           const fbPeds=[...arr1,...arr2];
-          if(fbPeds.length>=DB.pedidos.length)DB.pedidos=fbPeds;
+          if(fbPeds.length>=DB.pedidos.length)DB.pedidos=mergePedidosSeguro(fbPeds,DB.pedidos);
         }catch(e){}
       }
       salvarCacheLocalSeguro();
@@ -13130,7 +13239,7 @@ function migrarPedidosTrimestrais(){
       });
       var seen={};
       allPeds=allPeds.filter(function(p){if(!p.id||seen[p.id])return false;seen[p.id]=true;return true;});
-      if(allPeds.length>=DB.pedidos.length){DB.pedidos=allPeds;mudou=true;
+      if(allPeds.length>=DB.pedidos.length){DB.pedidos=mergePedidosSeguro(allPeds,DB.pedidos);mudou=true;
         cmxLog('SYNC','Pedidos carregados',''+allPeds.length+' pedidos de '+docsParaUsar.length+' doc(s)');
       }
     }
@@ -13145,7 +13254,7 @@ function migrarPedidosTrimestrais(){
     if(metaCli&&metaCli.exists&&tsFireCli>=tsLocal&&!_firebaseSavePending&&!_nuvemSaving){
       try{
         var fbClis=JSON.parse(metaCli.data().clientes||'[]');
-        DB.clientes=safeMerge(fbClis,DB.clientes);mudou=true;
+        DB.clientes=mergeCamposSeguro(fbClis,DB.clientes);mudou=true;
       }catch(e){}
     }
     // ── META_FIN
@@ -13153,8 +13262,8 @@ function migrarPedidosTrimestrais(){
     if(metaFin&&metaFin.exists&&tsFireFin>=tsLocal&&!_firebaseSavePending&&!_nuvemSaving){
       try{
         const mf=metaFin.data();
-        if(mf.boletos){DB.boletos=safeMerge(JSON.parse(mf.boletos||'[]'),DB.boletos);}
-        if(mf.despesas){DB.despesas=safeMerge(JSON.parse(mf.despesas||'[]'),DB.despesas);}
+        if(mf.boletos){DB.boletos=mergeComEstadoSeguro(JSON.parse(mf.boletos||'[]'),DB.boletos,'pago',true);}
+        if(mf.despesas){DB.despesas=mergeComEstadoSeguro(JSON.parse(mf.despesas||'[]'),DB.despesas,'pago',true);}
         mudou=true;
       }catch(e){}
     }
@@ -13163,10 +13272,10 @@ function migrarPedidosTrimestrais(){
     if(metaOp&&metaOp.exists&&tsFireOp>=tsLocal&&!_firebaseSavePending&&!_nuvemSaving){
       try{
         const mo=metaOp.data();
-        if(mo.entradas){DB.entradas=safeMerge(JSON.parse(mo.entradas||'[]'),DB.entradas);}
-        if(mo.fornecedores){DB.fornecedores=safeMerge(JSON.parse(mo.fornecedores||'[]'),DB.fornecedores);}
-        if(mo.devolucoes){DB.devolucoes=safeMerge(JSON.parse(mo.devolucoes||'[]'),DB.devolucoes);}
-        if(mo.parceiros){DB.parceiros=safeMerge(JSON.parse(mo.parceiros||'[]'),DB.parceiros);}
+        if(mo.entradas){DB.entradas=mergeCamposSeguro(JSON.parse(mo.entradas||'[]'),DB.entradas);}
+        if(mo.fornecedores){DB.fornecedores=mergeCamposSeguro(JSON.parse(mo.fornecedores||'[]'),DB.fornecedores);}
+        if(mo.devolucoes){DB.devolucoes=mergeComEstadoSeguro(JSON.parse(mo.devolucoes||'[]'),DB.devolucoes,'creditoStatus','usado');}
+        if(mo.parceiros){DB.parceiros=mergeParceirosSeguro(JSON.parse(mo.parceiros||'[]'),DB.parceiros);}
         if(mo.tarefas)DB.tarefas=JSON.parse(mo.tarefas||'[]');
         if(mo.xmlMemoria)DB.xmlMemoria=JSON.parse(mo.xmlMemoria||'{}');
         mudou=true;
@@ -13328,9 +13437,9 @@ function iniciarAutoBackup(){
             fbArr.forEach(function(r){if(r.id)map[r.id]=r;}); // Firebase vence por ser mais recente
             return Object.values(map);
           }
-          DB.pedidos=mergeBi(fbPeds,DB.pedidos);
+          DB.pedidos=mergePedidosSeguro(fbPeds,DB.pedidos);
           var fbCli=metaCli&&metaCli.exists?JSON.parse(metaCli.data().clientes||'[]'):JSON.parse(m.clientes||'[]');
-          DB.clientes=mergeBi(fbCli,DB.clientes);
+          DB.clientes=mergeCamposSeguro(fbCli,DB.clientes);
           var fbProds=[];
           Object.keys(D).filter(function(k){return k==='produtos'||/^produtos_\d+$/.test(k);})
             .sort(function(a,b){var na=a==='produtos'?0:parseInt(a.split('_')[1]);var nb=b==='produtos'?0:parseInt(b.split('_')[1]);return na-nb;})
@@ -13338,15 +13447,15 @@ function iniciarAutoBackup(){
           DB.produtos=mergeBi(fbProds,DB.produtos);
           if(metaFin&&metaFin.exists){
             var mf=metaFin.data();
-            DB.boletos=mergeBi(JSON.parse(mf.boletos||'[]'),DB.boletos);
-            DB.despesas=mergeBi(JSON.parse(mf.despesas||'[]'),DB.despesas);
+            DB.boletos=mergeComEstadoSeguro(JSON.parse(mf.boletos||'[]'),DB.boletos,'pago',true);
+            DB.despesas=mergeComEstadoSeguro(JSON.parse(mf.despesas||'[]'),DB.despesas,'pago',true);
           }
           if(metaOp&&metaOp.exists){
             var mo=metaOp.data();
-            DB.fornecedores=mergeBi(JSON.parse(mo.fornecedores||'[]'),DB.fornecedores);
-            DB.entradas=mergeBi(JSON.parse(mo.entradas||'[]'),DB.entradas);
-            DB.devolucoes=mergeBi(JSON.parse(mo.devolucoes||'[]'),DB.devolucoes);
-            DB.parceiros=mergeBi(JSON.parse(mo.parceiros||'[]'),DB.parceiros);
+            DB.fornecedores=mergeCamposSeguro(JSON.parse(mo.fornecedores||'[]'),DB.fornecedores);
+            DB.entradas=mergeCamposSeguro(JSON.parse(mo.entradas||'[]'),DB.entradas);
+            DB.devolucoes=mergeComEstadoSeguro(JSON.parse(mo.devolucoes||'[]'),DB.devolucoes,'creditoStatus','usado');
+            DB.parceiros=mergeParceirosSeguro(JSON.parse(mo.parceiros||'[]'),DB.parceiros);
           }
           if(m.seq){try{var fbSeq=JSON.parse(m.seq);DB.seq.ped=Math.max(DB.seq.ped||0,fbSeq.ped||0);DB.seq.orc=Math.max(DB.seq.orc||0,fbSeq.orc||0);}catch(e){}}
           salvarCacheLocalSeguro();
@@ -13530,7 +13639,7 @@ window.auth.onAuthStateChanged(function(user){
           window._lastHashes.fin=quickHash(JSON.stringify(DB.boletos||[])+JSON.stringify(DB.despesas||[]));
           window._lastHashes.op=quickHash(JSON.stringify(DB.fornecedores||[])+JSON.stringify(DB.entradas||[]).slice(0,200));
           var _pc2=DB.produtos||[];
-          for(var _j=0;_j<Math.ceil(_pc2.length/2000)||1;_j++){
+          for(var _j=0;_j<(Math.ceil(_pc2.length/2000)||1);_j++){
             window._lastHashes['prod_'+_j]=quickHash(JSON.stringify(_pc2.slice(_j*2000,(_j+1)*2000)));
           }
           inicializarHashesPedidos();
