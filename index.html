@@ -13163,14 +13163,72 @@ function forcarUpload(){
       var ki=i===0?'produtos':'produtos_'+(i/2000);
       docs.push({path:ki,data:{ts:ts,produtos:JSON.stringify(ck)}});
     }
-    // Pedidos por mês
-    var pedsByM={};
-    (DB.pedidos||[]).forEach(function(p){var k=getPedidosDocKey(p.dtISO||p.dt||'');if(!pedsByM[k])pedsByM[k]=[];pedsByM[k].push(p);});
-    Object.keys(pedsByM).forEach(function(k){
-      docs.push({path:k,data:{ts:ts,pedidos:JSON.stringify(pedsByM[k])}});
-    });
     // Escreve um por um via REST (PATCH)
     var idx=0;var ok=0;var fail=0;var total=docs.length+1;
+    // Pedidos por mês, divididos por TAMANHO (mesma proteção de 1MB do
+    // Firestore usada em salvarNaNuvem) e mesclados com o que já existe na
+    // nuvem antes de sobrescrever — local vence para os dados gerais (é
+    // uma restauração de backup, decisão explícita do usuário), mas
+    // pagamentos são unidos para nunca apagar um pagamento que só exista
+    // na nuvem (ex: registrado em outro dispositivo).
+    var LIMITE_CHUNK_BYTES_REST=700000;
+    var pedsByM={};
+    (DB.pedidos||[]).forEach(function(p){var k=getPedidosDocKey(p.dtISO||p.dt||'');if(!pedsByM[k])pedsByM[k]=[];pedsByM[k].push(p);});
+    var MAX_SONDAGEM_REST=30;
+    function lerDocRest(path){
+      return fetch(baseUrl+'/'+path,{headers:{'Authorization':'Bearer '+token}})
+        .then(function(r){return r.ok?r.json():null;})
+        .then(function(j){
+          if(!j||!j.fields||!j.fields.pedidos)return null;
+          try{return JSON.parse(j.fields.pedidos.stringValue||'[]');}catch(e){return null;}
+        }).catch(function(){return null;});
+    }
+    function sondarPedacosRest(mesKey,idx,encontrados){
+      if(idx>=MAX_SONDAGEM_REST)return Promise.resolve(encontrados);
+      var key=idx===0?mesKey:mesKey+'_'+(idx+1);
+      return lerDocRest(key).then(function(lista){
+        if(lista===null)return encontrados;
+        encontrados.push({key:key,pedidos:lista});
+        return sondarPedacosRest(mesKey,idx+1,encontrados);
+      });
+    }
+    var prepPedidos=Promise.all(Object.keys(pedsByM).map(function(mesKey){
+      return sondarPedacosRest(mesKey,0,[]).then(function(pedacosExistentes){
+        var pedidosNuvem=[];
+        pedacosExistentes.forEach(function(p){pedidosNuvem=pedidosNuvem.concat(p.pedidos);});
+        var pedidosMesclados=mergePedidosParaEscritaSegura(pedidosNuvem,pedsByM[mesKey]);
+        var chunks=[];var atual=[];var atualBytes=0;
+        for(var i=0;i<pedidosMesclados.length;i++){
+          var tamPed=JSON.stringify(pedidosMesclados[i]).length;
+          if(atual.length&&atualBytes+tamPed>LIMITE_CHUNK_BYTES_REST){chunks.push(atual);atual=[];atualBytes=0;}
+          atual.push(pedidosMesclados[i]);atualBytes+=tamPed;
+        }
+        if(atual.length||!chunks.length)chunks.push(atual);
+        var docsDoMes=[];
+        chunks.forEach(function(chunk,idx){
+          var key=idx===0?mesKey:mesKey+'_'+(idx+1);
+          docsDoMes.push({path:key,data:{ts:ts,pedidos:JSON.stringify(chunk)}});
+        });
+        for(var idxExc=chunks.length;idxExc<pedacosExistentes.length;idxExc++){
+          var keyExc=idxExc===0?mesKey:mesKey+'_'+(idxExc+1);
+          docsDoMes.push({path:keyExc,data:{ts:ts,pedidos:'[]'}});
+        }
+        return docsDoMes;
+      });
+    })).then(function(arraysDeDocs){
+      var todos=[];arraysDeDocs.forEach(function(a){todos=todos.concat(a);});
+      return todos;
+    });
+    prepPedidos.then(function(docsDePedidos){
+      docsDePedidos.forEach(function(d){docs.push(d);});
+      total=docs.length+1;
+      writeNext();
+    }).catch(function(e){
+      cmxLog('ERROR','Preparar pedidos para upload REST falhou',e.message||'');
+      toast('⚠ Erro ao preparar pedidos para upload','#ef4444');
+      window._blockSync=false;
+    });
+    return; // writeNext() só é chamado depois que prepPedidos resolver, acima
     function writeNext(){
       if(idx>=docs.length){
         // Meta por último
