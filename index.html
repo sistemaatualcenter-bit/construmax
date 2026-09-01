@@ -2665,6 +2665,16 @@ function prepararWritesPedidos(pedsByQ,timestamp,col){
     });
   }
   var promessas=Object.keys(pedsByQ).map(function(mesKey){
+    // Portão por hash: só faz o processo caro (sondar a nuvem, ler, mesclar,
+    // reescrever) se o conteúdo LOCAL deste mês mudou desde a última vez que
+    // foi escrito com sucesso. Sem isso, TODO mês seria reprocessado a cada
+    // salvamento — mesmo os que não mudaram — sobrecarregando a fila de
+    // escrita do Firestore em lojas com muitos meses de histórico.
+    var localStr=JSON.stringify(pedsByQ[mesKey]);
+    var localHash=quickHash(localStr);
+    if(localHash===(window._lastHashes['pedmes_'+mesKey]||'')){
+      return Promise.resolve([]);
+    }
     return sondarPedacos(mesKey,0,[]).then(function(pedacosExistentes){
       var pedidosNuvem=[];
       pedacosExistentes.forEach(function(p){pedidosNuvem=pedidosNuvem.concat(p.pedidos);});
@@ -2683,7 +2693,7 @@ function prepararWritesPedidos(pedsByQ,timestamp,col){
       chunks.forEach(function(chunk,idx){
         var key=idx===0?mesKey:mesKey+'_'+(idx+1);
         var pedStr=JSON.stringify(chunk);
-        writesDoMes.push({ref:col.doc(key),data:{ts:timestamp,pedidos:pedStr},name:key,hash:'ped_'+key,hashVal:quickHash(pedStr)});
+        writesDoMes.push({ref:col.doc(key),data:{ts:timestamp,pedidos:pedStr},name:key,hash:'ped_'+key,hashVal:quickHash(pedStr),hashMes:'pedmes_'+mesKey,hashMesVal:localHash});
       });
       // Esvazia pedaços que sobraram de uma divisão anterior com mais pedaços
       for(var idxExc=chunks.length;idxExc<pedacosExistentes.length;idxExc++){
@@ -2833,6 +2843,7 @@ function salvarNaNuvem(ts){
       // Atualiza hash de cada mês de pedidos que acabou de ser escrito
       writes.forEach(function(w){
         if(w.hash&&w.hash.indexOf('ped_')===0) window._lastHashes[w.hash]=w.hashVal;
+        if(w.hashMes) window._lastHashes[w.hashMes]=w.hashMesVal;
       });
       _firebaseSavePending=false;_nuvemSaving=false;
       showSI('saved');
