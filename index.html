@@ -2694,7 +2694,17 @@ function salvarNaNuvem(ts){
         var pedStr=JSON.stringify(chunk);
         var h=quickHash(pedStr);
         if(h!==(window._lastHashes['ped_'+key]||'')){
-          writes.push({ref:col.doc(key),data:{ts:timestamp,pedidos:pedStr},name:key,mergeFields:['pedidos'],hash:'ped_'+key,hashVal:h});
+          // IMPORTANTE: sem mergeFields aqui (escrita direta, não "ler e unir").
+          // As fronteiras de cada pedaço mudam conforme os dados locais mudam de
+          // tamanho — um mesmo pedido pode cair num pedaço diferente entre uma
+          // gravação e outra. Se a escrita fizesse união com o que já está na
+          // nuvem (como as outras coleções fazem), um pedido que "mudou de
+          // pedaço" ficaria com uma cópia antiga presa no pedaço velho E uma
+          // nova no pedaço certo — duplicado, crescendo a cada gravação, até
+          // estourar 1MB de novo. A escrita direta é segura aqui porque
+          // DB.pedidos em memória já passou pelo merge seguro (mergePedidosSeguro)
+          // no momento de carregar/sincronizar os dados.
+          writes.push({ref:col.doc(key),data:{ts:timestamp,pedidos:pedStr},name:key,hash:'ped_'+key,hashVal:h});
         }
       });
     });
