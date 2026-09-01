@@ -2615,6 +2615,90 @@ function quickHash(str){
   return h+'_'+str.length;
 }
 
+// Merge usado no momento de ESCREVER na nuvem (diferente de mergePedidosSeguro,
+// usado ao CARREGAR os dados): aqui o LOCAL vence para os campos gerais —
+// reflete a ação mais recente do usuário, incluindo uma restauração de
+// backup, que é uma decisão explícita e deve prevalecer sobre o que está na
+// nuvem — mas os PAGAMENTOS continuam sendo UNIDOS com o que já existe na
+// nuvem, para nunca apagar um pagamento registrado por outro dispositivo que
+// este ainda não tenha carregado.
+function mergePedidosParaEscritaSegura(nuvemArr,localArr){
+  var map={};
+  (nuvemArr||[]).forEach(function(r){if(r&&r.id)map[r.id]=r;});
+  (localArr||[]).forEach(function(r){
+    if(!r||!r.id)return;
+    var nuvem=map[r.id];
+    if(!nuvem){map[r.id]=r;return;}
+    map[r.id]=Object.assign({},r,{pagamentos:unirPagamentosSeguro(r.pagamentos,nuvem.pagamentos)});
+  });
+  return Object.values(map);
+}
+// Prepara os writes de pedidos de forma assíncrona: para cada mês com
+// mudanças, primeiro sonda quantos pedaços já existem na nuvem, lê o
+// conteúdo deles, mescla com os dados locais (via mergePedidosParaEscritaSegura,
+// que nunca perde um pagamento) e SÓ DEPOIS divide o resultado já mesclado em
+// pedaços por tamanho. Isso evita dois problemas que uma versão anterior
+// tinha, cada um ao tentar resolver o outro sozinho:
+//   • ler-e-unir por pedaço causava pedidos duplicados quando um pedido
+//     "migrava" de pedaço entre gravações (a fronteira de cada pedaço muda
+//     conforme o volume de dados muda) — o documento crescia sem parar até
+//     estourar 1MB de novo;
+//   • escrita direta sem nenhum merge apagava pedidos que só existiam na
+//     nuvem quando os dados locais estavam desatualizados (ex: ao restaurar
+//     um backup antigo, tudo que foi vendido depois do backup sumia).
+// Mesclando o CONJUNTO COMPLETO antes de dividir, cada pedido cai em
+// exatamente um pedaço no resultado final, e nada que exista só na nuvem é
+// perdido. Se o novo número de pedaços for menor que o que existia antes
+// (ex: dados diminuíram), os pedaços excedentes são explicitamente
+// esvaziados para não ficarem com conteúdo obsoleto.
+function prepararWritesPedidos(pedsByQ,timestamp,col){
+  var LIMITE_CHUNK_BYTES=700000;
+  var MAX_SONDAGEM=30; // bem acima de qualquer volume real esperado por mês
+  function sondarPedacos(mesKey,idx,encontrados){
+    if(idx>=MAX_SONDAGEM)return Promise.resolve(encontrados);
+    var key=idx===0?mesKey:mesKey+'_'+(idx+1);
+    return col.doc(key).get().then(function(doc){
+      if(!doc.exists)return encontrados;
+      var lista=[];try{lista=JSON.parse(doc.data().pedidos||'[]');}catch(e){}
+      encontrados.push({key:key,pedidos:lista});
+      return sondarPedacos(mesKey,idx+1,encontrados);
+    });
+  }
+  var promessas=Object.keys(pedsByQ).map(function(mesKey){
+    return sondarPedacos(mesKey,0,[]).then(function(pedacosExistentes){
+      var pedidosNuvem=[];
+      pedacosExistentes.forEach(function(p){pedidosNuvem=pedidosNuvem.concat(p.pedidos);});
+      var pedidosMesclados=mergePedidosParaEscritaSegura(pedidosNuvem,pedsByQ[mesKey]);
+      var chunks=[];
+      var atual=[];var atualBytes=0;
+      for(var i=0;i<pedidosMesclados.length;i++){
+        var tamPed=JSON.stringify(pedidosMesclados[i]).length;
+        if(atual.length&&atualBytes+tamPed>LIMITE_CHUNK_BYTES){
+          chunks.push(atual);atual=[];atualBytes=0;
+        }
+        atual.push(pedidosMesclados[i]);atualBytes+=tamPed;
+      }
+      if(atual.length||!chunks.length)chunks.push(atual);
+      var writesDoMes=[];
+      chunks.forEach(function(chunk,idx){
+        var key=idx===0?mesKey:mesKey+'_'+(idx+1);
+        var pedStr=JSON.stringify(chunk);
+        writesDoMes.push({ref:col.doc(key),data:{ts:timestamp,pedidos:pedStr},name:key,hash:'ped_'+key,hashVal:quickHash(pedStr)});
+      });
+      // Esvazia pedaços que sobraram de uma divisão anterior com mais pedaços
+      for(var idxExc=chunks.length;idxExc<pedacosExistentes.length;idxExc++){
+        var keyExc=idxExc===0?mesKey:mesKey+'_'+(idxExc+1);
+        writesDoMes.push({ref:col.doc(keyExc),data:{ts:timestamp,pedidos:'[]'},name:keyExc,hash:'ped_'+keyExc,hashVal:quickHash('[]')});
+      }
+      return writesDoMes;
+    });
+  });
+  return Promise.all(promessas).then(function(arraysDeWrites){
+    var todos=[];
+    arraysDeWrites.forEach(function(arr){todos=todos.concat(arr);});
+    return todos;
+  });
+}
 function salvarNaNuvem(ts){
   if(!window.db || !window.currentUser) return;
   if(window._fbCircuitOpen){_firebaseSavePending=false;_nuvemSaving=false;return;}
@@ -2670,45 +2754,13 @@ function salvarNaNuvem(ts){
       if(h!==(window._lastHashes['prod_'+idx]||'')) writes.push({ref:col.doc(key),data:{ts:timestamp,produtos:JSON.stringify(chunk)},name:key,hash:'prod_'+idx,hashVal:h,mergeFields:['produtos']});
     }
   }
-  // pedidos (verifica TODOS os meses por hash — evita bug de marcar o mês errado)
-  // Cada mês pode ultrapassar o limite de 1MB por documento do Firestore em
-  // lojas com alto volume — por isso divide por TAMANHO REAL (não por contagem
-  // fixa, já que pedidos variam muito de tamanho entre si) em pedaços seguros
-  // de até 700KB, criando pedidos_AAAA_MM, pedidos_AAAA_MM_2, pedidos_AAAA_MM_3...
-  if(dirty.all||dirty.pedidos){
-    var LIMITE_CHUNK_BYTES=700000;
-    Object.keys(pedsByQ).forEach(function(mesKey){
-      var lista=pedsByQ[mesKey];
-      var chunks=[];
-      var atual=[];var atualBytes=0;
-      for(var i=0;i<lista.length;i++){
-        var tamPed=JSON.stringify(lista[i]).length;
-        if(atual.length&&atualBytes+tamPed>LIMITE_CHUNK_BYTES){
-          chunks.push(atual);atual=[];atualBytes=0;
-        }
-        atual.push(lista[i]);atualBytes+=tamPed;
-      }
-      if(atual.length||!chunks.length)chunks.push(atual);
-      chunks.forEach(function(chunk,idx){
-        var key=idx===0?mesKey:mesKey+'_'+(idx+1);
-        var pedStr=JSON.stringify(chunk);
-        var h=quickHash(pedStr);
-        if(h!==(window._lastHashes['ped_'+key]||'')){
-          // IMPORTANTE: sem mergeFields aqui (escrita direta, não "ler e unir").
-          // As fronteiras de cada pedaço mudam conforme os dados locais mudam de
-          // tamanho — um mesmo pedido pode cair num pedaço diferente entre uma
-          // gravação e outra. Se a escrita fizesse união com o que já está na
-          // nuvem (como as outras coleções fazem), um pedido que "mudou de
-          // pedaço" ficaria com uma cópia antiga presa no pedaço velho E uma
-          // nova no pedaço certo — duplicado, crescendo a cada gravação, até
-          // estourar 1MB de novo. A escrita direta é segura aqui porque
-          // DB.pedidos em memória já passou pelo merge seguro (mergePedidosSeguro)
-          // no momento de carregar/sincronizar os dados.
-          writes.push({ref:col.doc(key),data:{ts:timestamp,pedidos:pedStr},name:key,hash:'ped_'+key,hashVal:h});
-        }
-      });
-    });
-  }
+  // pedidos: preparados de forma assíncrona (ver prepararWritesPedidos) —
+  // sonda e lê o que já existe na nuvem para cada mês antes de decidir os
+  // pedaços finais, evitando tanto duplicação quanto perda de dados.
+  var precisaPrepararPedidos=(dirty.all||dirty.pedidos)&&Object.keys(pedsByQ).length>0;
+
+  function continuarComWrites(writesDePedidos){
+  writesDePedidos.forEach(function(w){writes.push(w);});
   // Se só meta (nada mudou), cancela
   if(writes.length<=1){
     _nuvemSaving=false;_firebaseSavePending=false;showSI('saved');return;
@@ -2807,6 +2859,15 @@ function salvarNaNuvem(ts){
     }
   }
   next();
+  } // fim de continuarComWrites
+  if(precisaPrepararPedidos){
+    prepararWritesPedidos(pedsByQ,timestamp,col).then(continuarComWrites).catch(function(e){
+      cmxLog('WARN','Preparar writes de pedidos falhou',(e&&e.message)||String(e));
+      _nuvemSaving=false;_firebaseSavePending=false;showSI('saved');
+    });
+  } else {
+    continuarComWrites([]);
+  }
 }
 
 function showSI(estado){
