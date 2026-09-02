@@ -344,6 +344,10 @@ select.inp option{background:var(--card2)}
     <div class="pt">Clientes <span id="cli-cnt"></span></div>
     <div class="ha">
       <div class="sb2"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg><input placeholder="Buscar..." id="src-cli" oninput="window._cliPage=0;renderClientes()"></div>
+      <select class="inp" style="width:180px" id="fil-cli-status" onchange="window._cliPage=0;renderClientes()">
+        <option value="">Todos</option>
+        <option value="aberto">Com pedido em aberto</option>
+      </select>
       <button class="btn bp" onclick="abrirCliente()">+ Novo Cliente</button>
     </div>
   </div>
@@ -3961,6 +3965,8 @@ function impCrit(){
 function renderClientes(resetPage){
   if(resetPage)window._cliPage=0;
   const q=(document.getElementById('src-cli')?.value||'').toLowerCase();
+  const filStatus=document.getElementById('fil-cli-status')?.value||'';
+  const hoje=new Date();hoje.setHours(0,0,0,0);
   // Ordena: clientes com pedidos recentes primeiro, depois alfabético
   // Isso garante que novos clientes aparecem quando buscados pelo nome
   const list=semExcluidos(DB.clientes)
@@ -3974,30 +3980,44 @@ function renderClientes(resetPage){
   const cfm=catFilModo||'com';
   const pedMap={};
   DB.pedidos.filter(d=>isAtivoFat(d)&&d.tipo==='ped').forEach(function(d){
-    if(!pedMap[d.cliId])pedMap[d.cliId]={total:0,aRec:0,count:0};
+    if(!pedMap[d.cliId])pedMap[d.cliId]={total:0,aRec:0,count:0,pedsAbertos:[]};
     pedMap[d.cliId].total+=docTotalFil(d,cfm);
     pedMap[d.cliId].count++;
   });
   DB.pedidos.filter(d=>isAtivo(d)&&d.tipo==='ped').forEach(function(d){
-    if(!pedMap[d.cliId])pedMap[d.cliId]={total:0,aRec:0,count:0};
+    if(!pedMap[d.cliId])pedMap[d.cliId]={total:0,aRec:0,count:0,pedsAbertos:[]};
     pedMap[d.cliId].aRec+=docSaldo(d);
+    if(docSaldo(d)>0)pedMap[d.cliId].pedsAbertos.push(d);
   });
+  // Calcula atraso por cliente — mesma lógica já usada em Contas a Receber
+  // (calcVencimentoCliente): vencimento = prazo do pedido mais antigo em
+  // aberto, contado a partir do último pagamento (ou da data do pedido, se
+  // ainda não houve nenhum pagamento).
+  Object.keys(pedMap).forEach(function(cliId){
+    const stats=pedMap[cliId];
+    if(!stats.pedsAbertos.length){stats.vencido=false;return;}
+    const venc=calcVencimentoCliente(stats.pedsAbertos);
+    stats.vencido=!!(venc&&(function(){const vv=new Date(venc);vv.setHours(0,0,0,0);return vv<hoje;})());
+  });
+  const listFiltrada=filStatus==='aberto'
+    ?list.filter(c=>(pedMap[c.id]?.pedsAbertos.length||0)>0)
+    :list;
   const PAGE_CLI=100;
   const pageAtual=window._cliPage||0;
   const inicio=pageAtual*PAGE_CLI;
-  const listShown=list.slice(0,inicio+PAGE_CLI);
-  const temMais=list.length>listShown.length;
+  const listShown=listFiltrada.slice(0,inicio+PAGE_CLI);
+  const temMais=listFiltrada.length>listShown.length;
   const cliCnt=document.getElementById('cli-cnt');
-  if(cliCnt) cliCnt.textContent=list.length+' cliente(s)'+(temMais?' — mostrando '+listShown.length:'');
+  if(cliCnt) cliCnt.textContent=listFiltrada.length+' cliente(s)'+(temMais?' — mostrando '+listShown.length:'');
   document.getElementById('cli-tbody').innerHTML=listShown.length?listShown.map(c=>{
-    const stats=pedMap[c.id]||{total:0,aRec:0,count:0};
+    const stats=pedMap[c.id]||{total:0,aRec:0,count:0,vencido:false};
     const peds={length:stats.count};
     const total=stats.total;
     const aRec=stats.aRec;
     const isAnon=c.id==='cli-anonimo';
     const pars=(c.indicadores||[]).map(id=>(DB.parceiros||[]).find(p=>p.id===id)).filter(Boolean);
     return`<tr style="${isAnon?'opacity:0.7;background:var(--card2)':''}">
-      <td style="font-weight:600">${c.nome}${isAnon?` <span style="font-size:10px;background:#64748b20;color:#64748b;padding:1px 6px;border-radius:4px">padrão</span>`:''}
+      <td style="font-weight:600${stats.vencido?';color:#ef4444':''}">${c.nome}${isAnon?` <span style="font-size:10px;background:#64748b20;color:#64748b;padding:1px 6px;border-radius:4px">padrão</span>`:''}${stats.vencido?` <span style="font-size:10px;background:#ef444420;color:#ef4444;padding:1px 6px;border-radius:4px">⚠ em atraso</span>`:''}
         ${pars.length?`<div style="font-size:10px;color:#a78bfa;margin-top:1px">🤝 ${pars.map(p=>p.nome).join(', ')}</div>`:''}</td>
       <td style="color:var(--mt);font-size:11.5px">${c.cpf||'--'}</td>
       <td>${c.tel||'--'}</td><td>${c.cidade||'--'}</td>
@@ -4015,8 +4035,8 @@ function renderClientes(resetPage){
     document.getElementById('cli-tbody').innerHTML+=
       `<tr><td colspan="7" style="text-align:center;padding:12px">
         <button class="btn bp bsm" onclick="window._cliPage=(window._cliPage||0)+1;renderClientes()">
-          ▼ Ver mais ${Math.min(PAGE_CLI, list.length-listShown.length)} clientes
-          (${list.length-listShown.length} restantes)
+          ▼ Ver mais ${Math.min(PAGE_CLI, listFiltrada.length-listShown.length)} clientes
+          (${listFiltrada.length-listShown.length} restantes)
         </button>
       </td></tr>`;
   }
