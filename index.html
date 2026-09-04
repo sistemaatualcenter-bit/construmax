@@ -2577,7 +2577,15 @@ function saveDB(){
     _localTimer=null;
     salvarCacheLocalSeguro();
   },500);
-  // Debounce Firebase 3s (reduzido de 8s para diminuir tempo total de espera)
+  // Debounce Firebase 6s — agrupa ações rápidas em sequência (ex: vários
+  // pagamentos registrados um atrás do outro) num único ciclo de
+  // sincronização, em vez de disparar um ciclo completo para cada ação.
+  // Reduzido de 8s para 3s numa correção anterior para diminuir o tempo de
+  // espera; aumentado agora para 6s porque 3s se mostrou curto demais em
+  // uso intenso — várias ações espaçadas em mais de 3s (mas ainda rápidas)
+  // disparavam um ciclo de sincronização cada, sobrecarregando a fila de
+  // escrita do Firestore ("resource-exhausted") mesmo com cada gravação
+  // individual sendo pequena.
   if(_nuvemTimer) clearTimeout(_nuvemTimer);
   _nuvemTimer=setTimeout(function(){
     _nuvemTimer=null;
@@ -2585,11 +2593,11 @@ function saveDB(){
       _nuvemTimer=setTimeout(function(){
         _nuvemTimer=null;
         salvarNaNuvem(parseInt(localStorage.getItem(KEY+'_ts')||Date.now()));
-      },3000);
+      },4000);
       return;
     }
     salvarNaNuvem(ts);
-  },3000);
+  },6000);
 }
 
 // ── Helper: retorna chave do documento por MÊS (evita limite 1MB do Firestore) ──
@@ -8855,12 +8863,16 @@ function renderContas(){
   const fil=document.getElementById('fil-contas-st')?.value||'';
   const hoje=new Date();hoje.setHours(0,0,0,0);
   const em7=new Date(hoje);em7.setDate(em7.getDate()+7);
-  const prazoForms=['prazo','boleto','receber no local'];
-  // Pedidos a prazo com saldo devedor
+  // Qualquer pedido com saldo devedor real entra aqui — independente da
+  // forma de pagamento originalmente escolhida. Uma venda "à vista" com
+  // pagamento inicial parcial (ex: pag='dinheiro' mas só parte do valor
+  // pago na hora) também gera uma dívida real, e precisa aparecer aqui —
+  // antes, o filtro por forma de pagamento fazia esses clientes sumirem
+  // completamente desta tela mesmo tendo saldo devedor real e visível no
+  // Dashboard e na Ficha do Cliente.
   const pedsFiltrados=DB.pedidos.filter(d=>{
     if(d.tipo!=='ped'||!isAtivo(d))return false;
     if(docSaldo(d)<=0)return false;
-    if(!prazoForms.includes(d.pag))return false;
     return true;
   });
   // Agrupa por cliente
