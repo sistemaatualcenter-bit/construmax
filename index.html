@@ -2597,23 +2597,52 @@ function saveDB(){
   // pagamentos registrados um atrás do outro) num único ciclo de
   // sincronização, em vez de disparar um ciclo completo para cada ação.
   // Reduzido de 8s para 3s numa correção anterior para diminuir o tempo de
-  // espera; aumentado agora para 6s porque 3s se mostrou curto demais em
-  // uso intenso — várias ações espaçadas em mais de 3s (mas ainda rápidas)
+  // espera; aumentado para 6s porque 3s se mostrou curto demais em uso
+  // intenso — várias ações espaçadas em mais de 3s (mas ainda rápidas)
   // disparavam um ciclo de sincronização cada, sobrecarregando a fila de
   // escrita do Firestore ("resource-exhausted") mesmo com cada gravação
   // individual sendo pequena.
+  //
+  // TETO MÁXIMO DE ESPERA (adicionado após a correção acima ter, sem
+  // querer, permitido o problema oposto): um debounce puro reinicia o
+  // cronômetro a cada ação nova. Numa loja com atividade contínua e rápida
+  // (ações chegando com menos de 6s de intervalo entre si, o que é comum
+  // em horário de pico), o cronômetro nunca chega a zerar sozinho — a
+  // sincronização com a nuvem podia nunca acontecer enquanto a atividade
+  // não parasse por 6s seguidos. Se o navegador fechasse nesse meio tempo,
+  // tudo daquela rajada ficava só no armazenamento local, nunca chegando
+  // na nuvem — o que pareceria "pagamentos perdidos" ao abrir em outro
+  // dispositivo. Agora, se já se passaram 6s ou mais desde a PRIMEIRA ação
+  // não sincronizada da rajada atual, força a sincronização imediatamente
+  // em vez de adiar de novo.
+  if(!window._primeiraAcaoNaoSincronizadaTs)window._primeiraAcaoNaoSincronizadaTs=ts;
+  const tempoDesdeAPrimeira=ts-window._primeiraAcaoNaoSincronizadaTs;
   if(_nuvemTimer) clearTimeout(_nuvemTimer);
-  _nuvemTimer=setTimeout(function(){
-    _nuvemTimer=null;
-    if(_nuvemSaving){
-      _nuvemTimer=setTimeout(function(){
-        _nuvemTimer=null;
-        salvarNaNuvem(parseInt(localStorage.getItem(KEY+'_ts')||Date.now()));
-      },4000);
-      return;
-    }
-    salvarNaNuvem(ts);
-  },6000);
+  if(tempoDesdeAPrimeira>=6000){
+    _nuvemTimer=setTimeout(function(){
+      _nuvemTimer=null;
+      if(_nuvemSaving){
+        _nuvemTimer=setTimeout(function(){
+          _nuvemTimer=null;
+          salvarNaNuvem(parseInt(localStorage.getItem(KEY+'_ts')||Date.now()));
+        },4000);
+        return;
+      }
+      salvarNaNuvem(ts);
+    },0);
+  }else{
+    _nuvemTimer=setTimeout(function(){
+      _nuvemTimer=null;
+      if(_nuvemSaving){
+        _nuvemTimer=setTimeout(function(){
+          _nuvemTimer=null;
+          salvarNaNuvem(parseInt(localStorage.getItem(KEY+'_ts')||Date.now()));
+        },4000);
+        return;
+      }
+      salvarNaNuvem(ts);
+    },6000);
+  }
 }
 
 // ── Helper: retorna chave do documento por MÊS (evita limite 1MB do Firestore) ──
@@ -2750,6 +2779,7 @@ function salvarNaNuvem(ts){
   }
   _nuvemSaving=true;
   window._nuvemSavingTs=Date.now();
+  window._primeiraAcaoNaoSincronizadaTs=null;
   var uid = window.currentUser.uid;
   var timestamp = ts || parseInt(localStorage.getItem(KEY+'_ts')||'0') || Date.now();
   var col = window.db.collection('lojas').doc(uid).collection('d');
@@ -6088,7 +6118,11 @@ function confirmarEntregaLote(){
     if(!d||!d.entrega)return;
     d.entrega.st='entregue';
     d.entrega.dtEntregue=hoje;
-    d.st='entregue';
+    // Só marca o status FINANCEIRO do pedido como "entregue" se ele já
+    // estiver com saldo zerado — senão preserva o status real (ex:
+    // em-aberto), para não esconder um saldo devedor real dos filtros que
+    // dependem do status (ex: "Em Aberto" na Lista de Pedidos).
+    if(docSaldo(d)<=0)d.st='entregue';
     salvarRegistro('pedidos',d.id,d);
     confirmados++;
   });
@@ -6101,7 +6135,10 @@ function confirmarEntrega(id){
   const d=DB.pedidos.find(x=>x.id===id);if(!d||!d.entrega)return;
   d.entrega.st='entregue';
   d.entrega.dtEntregue=dtHtml();
-  d.st='entregue';
+  // Só marca o status FINANCEIRO como "entregue" se o pedido ja estiver
+  // com saldo zerado — senao preserva o status real (ex: em-aberto), para
+  // nao esconder um saldo devedor real dos filtros baseados em status.
+  if(docSaldo(d)<=0)d.st='entregue';
   if(d)salvarRegistro('pedidos',d.id,d);
   markDirty('pedidos');saveDB();renderEntregas();renderPedidos();toast('\u2713 Entrega confirmada!');
 }
