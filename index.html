@@ -421,8 +421,8 @@ select.inp option{background:var(--card2)}
   <div class="ph">
     <div class="pt">Entregas <span id="ent-cnt"></span></div>
     <div class="ha">
-      <div class="sb2"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg><input placeholder="Buscar cliente ou pedido..." id="src-entrega" oninput="renderEntregas()"></div>
-      <select class="inp" style="width:150px" id="fil-entrega-st" onchange="renderEntregas()">
+      <div class="sb2"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg><input placeholder="Buscar cliente ou pedido..." id="src-entrega" oninput="limparSelecaoEntregas();renderEntregas()"></div>
+      <select class="inp" style="width:150px" id="fil-entrega-st" onchange="limparSelecaoEntregas();renderEntregas()">
         <option value="">Todos os status</option>
         <option value="a-entregar">A Entregar</option>
         <option value="ag-autorizacao">Ag. Autorização</option>
@@ -430,9 +430,9 @@ select.inp option{background:var(--card2)}
       </select>
       <div style="display:flex;align-items:center;gap:7px;background:var(--card);border:1px solid var(--br);border-radius:9px;padding:6px 11px">
         <span style="color:var(--mt);font-size:11.5px">Prev.:</span>
-        <input class="inp" id="fil-entrega-ini" type="date" style="width:125px;padding:0;border:none;background:none;font-size:12px" onchange="renderEntregas()">
+        <input class="inp" id="fil-entrega-ini" type="date" style="width:125px;padding:0;border:none;background:none;font-size:12px" onchange="limparSelecaoEntregas();renderEntregas()">
         <span style="color:var(--mt);font-size:11.5px">até</span>
-        <input class="inp" id="fil-entrega-fim" type="date" style="width:125px;padding:0;border:none;background:none;font-size:12px" onchange="renderEntregas()">
+        <input class="inp" id="fil-entrega-fim" type="date" style="width:125px;padding:0;border:none;background:none;font-size:12px" onchange="limparSelecaoEntregas();renderEntregas()">
       </div>
       <button class="btn bg bsm" onclick="imprimirRomaneio()">🖨 Romaneio</button>
       <button class="btn bg bsm" onclick="limparFiltroEntrega()">✕</button>
@@ -442,21 +442,30 @@ select.inp option{background:var(--card2)}
   <div class="kg" id="entrega-kpis" style="grid-template-columns:repeat(4,1fr);margin-bottom:16px"></div>
   <!-- Pendentes -->
   <div class="card" style="margin-bottom:14px">
-    <div style="padding:12px 16px;border-bottom:1px solid var(--br2);display:flex;justify-content:space-between;align-items:center">
+    <div style="padding:12px 16px;border-bottom:1px solid var(--br2);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
       <div style="font-weight:700;font-size:13px">🚚 Entregas Pendentes</div>
+      <div id="entrega-lote-bar" style="display:none;align-items:center;gap:10px">
+        <span id="entrega-lote-cnt" style="font-size:12px;color:var(--mt)"></span>
+        <button class="btn bs bsm" onclick="confirmarEntregaLote()">✓ Confirmar entrega dos selecionados</button>
+      </div>
     </div>
     <div class="tw"><table>
-      <thead><tr><th>Pedido</th><th>Cliente</th><th>Data Pedido</th><th>Prev. Entrega</th><th>Endereço</th><th>Total</th><th>Pgto</th><th>Status Entrega</th><th>Ações</th></tr></thead>
+      <thead><tr><th style="width:32px"><input type="checkbox" id="entrega-sel-all" onchange="toggleSelAllEntregas(this.checked)"></th><th>Pedido</th><th>Cliente</th><th>Data Pedido</th><th>Prev. Entrega</th><th>Endereço</th><th>Total</th><th>Pgto</th><th>Status Entrega</th><th>Ações</th></tr></thead>
       <tbody id="entrega-tbody-pend"></tbody>
     </table></div>
   </div>
   <!-- Histórico entregues -->
   <div class="card">
-    <div style="padding:12px 16px;border-bottom:1px solid var(--br2);font-weight:700;font-size:13px">✅ Histórico de Entregas Concluídas</div>
-    <div class="tw"><table>
-      <thead><tr><th>Pedido</th><th>Cliente</th><th>Data Entrega</th><th>Endereço</th><th>Total</th><th>Ações</th></tr></thead>
-      <tbody id="entrega-tbody-hist"></tbody>
-    </table></div>
+    <div id="hist-entregas-header" onclick="toggleHistEntregas()" style="padding:12px 16px;border-bottom:1px solid var(--br2);font-weight:700;font-size:13px;display:flex;justify-content:space-between;align-items:center;cursor:pointer;user-select:none">
+      <span>✅ Histórico de Entregas Concluídas</span>
+      <span id="hist-entregas-seta" style="transition:transform .15s;display:inline-block">▶</span>
+    </div>
+    <div id="hist-entregas-body" style="display:none">
+      <div class="tw"><table>
+        <thead><tr><th>Pedido</th><th>Cliente</th><th>Data Entrega</th><th>Endereço</th><th>Total</th><th>Ações</th></tr></thead>
+        <tbody id="entrega-tbody-hist"></tbody>
+      </table></div>
+    </div>
   </div>
 </div>
 
@@ -5825,6 +5834,7 @@ function renderEntregas(){
     const temParcial=parciais.length>0;
     const progressBar=temParcial?`<div style="margin-top:4px;height:4px;background:var(--br);border-radius:2px;width:80px"><div style="height:100%;border-radius:2px;background:#a78bfa;width:${pct}%"></div></div><div style="font-size:10px;color:var(--mt)">${pct}% entregue</div>`:'';
     return`<tr>
+      <td><input type="checkbox" class="entrega-sel-item" data-id="${d.id}" onchange="toggleSelEntrega('${d.id}',this.checked)" ${window._entregaSelecionados&&window._entregaSelecionados.has(d.id)?'checked':''}></td>
       <td style="color:var(--or);font-weight:700">${d.num}</td>
       <td style="font-weight:600">${d.cliNome}</td>
       <td style="color:var(--mt)">${d.dt}</td>
@@ -5839,7 +5849,7 @@ function renderEntregas(){
         <button class="btn bs bsm" onclick="confirmarEntrega('${d.id}')">✓ Entregue</button>
       </div></td>
     </tr>`;
-  }).join(''):`<tr><td colspan="9" class="es">Nenhuma entrega pendente</td></tr>`;
+  }).join(''):`<tr><td colspan="10" class="es">Nenhuma entrega pendente</td></tr>`;
   // Histórico
   document.getElementById('entrega-tbody-hist').innerHTML=entregues.length?entregues.slice().sort((a,b)=>(b.entrega.dtEntregue||'').localeCompare(a.entrega.dtEntregue||'')).map(d=>{
     const e=d.entrega;
@@ -5853,6 +5863,8 @@ function renderEntregas(){
       <td><button class="btn bg bsm" onclick="verDoc('${d.id}',true)">Ver</button></td>
     </tr>`;
   }).join(''):`<tr><td colspan="6" class="es">Nenhuma entrega concluida</td></tr>`;
+  atualizarBarraLoteEntregas();
+  aplicarEstadoHistEntregas();
 }
 function imprimirEntregaParcial(){
   const id=document.getElementById('md-entrega-parcial').dataset.pedId;
@@ -5980,6 +5992,75 @@ function confirmarEntregaParcial(){
   }
   if(d)salvarRegistro('pedidos',d.id,d);
   markDirty('pedidos');saveDB();closeMD('entrega-parcial');renderEntregas();renderPedidos();
+}
+// Seleção em lote na tela de Entregas — persiste entre marcações individuais
+// (não entre mudanças de filtro, que limpam a seleção para evitar confirmar
+// algo que saiu da lista visível).
+window._entregaSelecionados=window._entregaSelecionados||new Set();
+function limparSelecaoEntregas(){
+  window._entregaSelecionados=new Set();
+}
+function atualizarBarraLoteEntregas(){
+  const bar=document.getElementById('entrega-lote-bar');
+  const cnt=window._entregaSelecionados.size;
+  if(!bar)return;
+  bar.style.display=cnt>0?'flex':'none';
+  const cntEl=document.getElementById('entrega-lote-cnt');
+  if(cntEl)cntEl.textContent=cnt+' selecionado(s)';
+  const selAll=document.getElementById('entrega-sel-all');
+  if(selAll){
+    const itens=Array.from(document.querySelectorAll('.entrega-sel-item'));
+    selAll.checked=itens.length>0&&itens.every(i=>i.checked);
+  }
+}
+// Histórico de Entregas Concluídas: minimizado por padrão. O estado fica em
+// memória (não em localStorage) — sempre começa fechado ao carregar a
+// página, mas não fecha sozinho enquanto o usuário navega e a lista é
+// atualizada (ex: após confirmar uma entrega).
+if(typeof window._histEntregasAberto==='undefined')window._histEntregasAberto=false;
+function toggleHistEntregas(){
+  window._histEntregasAberto=!window._histEntregasAberto;
+  aplicarEstadoHistEntregas();
+}
+function aplicarEstadoHistEntregas(){
+  const body=document.getElementById('hist-entregas-body');
+  const seta=document.getElementById('hist-entregas-seta');
+  if(!body||!seta)return;
+  body.style.display=window._histEntregasAberto?'block':'none';
+  seta.style.transform=window._histEntregasAberto?'rotate(90deg)':'rotate(0deg)';
+}
+function toggleSelEntrega(id,checked){
+  if(checked)window._entregaSelecionados.add(id);
+  else window._entregaSelecionados.delete(id);
+  atualizarBarraLoteEntregas();
+}
+function toggleSelAllEntregas(checked){
+  document.querySelectorAll('.entrega-sel-item').forEach(function(chk){
+    chk.checked=checked;
+    const id=chk.dataset.id;
+    if(checked)window._entregaSelecionados.add(id);
+    else window._entregaSelecionados.delete(id);
+  });
+  atualizarBarraLoteEntregas();
+}
+function confirmarEntregaLote(){
+  const ids=Array.from(window._entregaSelecionados);
+  if(!ids.length)return;
+  if(!confirm('Confirmar entrega de '+ids.length+' pedido(s) selecionado(s)?'))return;
+  const hoje=dtHtml();
+  let confirmados=0;
+  ids.forEach(function(id){
+    const d=DB.pedidos.find(x=>x.id===id);
+    if(!d||!d.entrega)return;
+    d.entrega.st='entregue';
+    d.entrega.dtEntregue=hoje;
+    d.st='entregue';
+    salvarRegistro('pedidos',d.id,d);
+    confirmados++;
+  });
+  limparSelecaoEntregas();
+  markDirty('pedidos');saveDB();renderEntregas();renderPedidos();
+  toast('✓ '+confirmados+' entrega(s) confirmada(s)!');
 }
 function confirmarEntrega(id){
   if(!confirm('Confirmar entrega realizada?'))return;
