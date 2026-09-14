@@ -474,14 +474,20 @@ select.inp option{background:var(--card2)}
   <div class="ph">
     <div class="pt">Produtos <span id="prd-cnt"></span></div>
     <div class="ha">
-      <div class="sb2"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg><input placeholder="Nome ou cód. barras..." id="src-prd" oninput="renderProdutos()"></div>
-      <select class="inp" style="width:130px" id="fil-cat" onchange="renderProdutos()"><option value="">Todas cats.</option></select>
+      <div class="sb2"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg><input placeholder="Nome ou cód. barras..." id="src-prd" oninput="limparSelecaoProdutos();renderProdutos()"></div>
+      <select class="inp" style="width:130px" id="fil-cat" onchange="limparSelecaoProdutos();renderProdutos()"><option value="">Todas cats.</option></select>
       <button class="btn bg bsm" onclick="ocultarProdutos()" title="Ocultar lista">✕ Ocultar</button>
       <button class="btn bp" onclick="abrirProduto()">+ Novo Produto</button>
     </div>
   </div>
-  <div class="card"><div class="tw"><table>
-    <thead><tr><th>Cód.Barras</th><th>Produto</th><th>Categoria</th><th>Custo</th><th>Preço</th><th>Margem</th><th>Estoque</th><th>Ações</th></tr></thead>
+  <div class="card">
+    <div id="prd-lote-bar" style="display:none;align-items:center;gap:10px;padding:10px 16px;border-bottom:1px solid var(--br2)">
+      <span id="prd-lote-cnt" style="font-size:12px;color:var(--mt)"></span>
+      <button class="btn bs bsm" onclick="alterarAlertaEstoqueLote(true)">⚠ Ativar monitoramento nos selecionados</button>
+      <button class="btn bg bsm" onclick="alterarAlertaEstoqueLote(false)">Desativar monitoramento nos selecionados</button>
+    </div>
+    <div class="tw"><table>
+    <thead><tr><th style="width:32px"><input type="checkbox" id="prd-sel-all" onchange="toggleSelAllProdutos(this.checked)"></th><th>Cód.Barras</th><th>Produto</th><th>Categoria</th><th>Custo</th><th>Preço</th><th>Margem</th><th>Estoque</th><th>Ações</th></tr></thead>
     <tbody id="prd-tbody"></tbody>
   </table></div></div>
 </div>
@@ -2086,6 +2092,10 @@ select.inp option{background:var(--card2)}
         <div class="fgrp ff" id="mp-mg-box" style="display:none"></div>
         <div class="fgrp"><label class="fl">Estoque Atual</label><input class="inp" id="mp-est" type="number" min="0" value="0"></div>
         <div class="fgrp"><label class="fl">Estoque Mínimo</label><input class="inp" id="mp-estmin" type="number" min="0" value="5"></div>
+        <div class="fgrp ff" style="display:flex;align-items:center;gap:8px;padding-top:6px">
+          <input type="checkbox" id="mp-alerta-estoque" style="width:16px;height:16px">
+          <label class="fl" for="mp-alerta-estoque" style="margin:0;cursor:pointer">⚠ Monitorar estoque crítico para este produto</label>
+        </div>
         <div class="fgrp ff"><label class="fl">Observações</label><textarea class="inp" id="mp-obs" rows="2"></textarea></div>
       </div>
     </div>
@@ -3060,13 +3070,23 @@ function unirPagamentosSeguro(pagLocal,pagFb){
   return unidos;
 }
 function mergePedidosSeguro(fbArr,localArr){
+  // Status "terminais": uma vez atingidos, só deveriam mudar por ação
+  // explícita do usuário (reabrir, excluir um pagamento, desfazer
+  // mesclagem) — nunca "regredir" porque a nuvem trouxe uma versão
+  // desatualizada do pedido (ex: de antes dele ter sido cancelado).
+  var STATUS_TERMINAIS=['cancelado','pago','mesclado','mesclado-pago','mesclado-aberto','convertido'];
   var map={};
   (localArr||[]).forEach(function(r){if(r&&r.id)map[r.id]=r;});
   (fbArr||[]).forEach(function(r){
     if(!r||!r.id)return;
     var local=map[r.id];
     if(!local){map[r.id]=r;return;}
-    map[r.id]=Object.assign({},r,{pagamentos:unirPagamentosSeguro(local.pagamentos,r.pagamentos)});
+    var pagamentosUnidos=unirPagamentosSeguro(local.pagamentos,r.pagamentos);
+    if(STATUS_TERMINAIS.indexOf(local.st)!==-1&&local.st!==r.st){
+      map[r.id]=Object.assign({},local,{pagamentos:pagamentosUnidos});
+    }else{
+      map[r.id]=Object.assign({},r,{pagamentos:pagamentosUnidos});
+    }
   });
   return Object.values(map);
 }
@@ -3581,7 +3601,7 @@ function renderDash(){
     else if(fim){recLabel='Recebido até '+fmtDt(fim);recSub='Até esta data';}
   }
 
-  const low=semExcluidos(DB.produtos).filter(p=>p.est<=p.estMin);
+  const low=semExcluidos(DB.produtos).filter(p=>p.alertaEstoque&&p.est<=p.estMin);
   const ab=document.getElementById('ab-stock');
   // Separa produtos que têm similar disponível
   const lowSemSimilar=low.filter(p=>!temSimilarComEstoque(p.id));
@@ -3998,7 +4018,7 @@ function fecharDetalhamentoFaturamento(){
   document.getElementById('detfat-overlay').style.display='none';
 }
 function impCrit(){
-  const low=semExcluidos(DB.produtos).filter(p=>p.est<=p.estMin);
+  const low=semExcluidos(DB.produtos).filter(p=>p.alertaEstoque&&p.est<=p.estMin);
   if(!low.length){toast('Sem itens críticos','#f59e0b');return;}
   const cfg=DB.config;
   const w=window.open('','_blank');
@@ -6385,6 +6405,54 @@ function mostrarTodosProdutos(){_showAllPrd=true;renderProdutos();}
 function ocultarProdutos(){_showAllPrd=false;document.getElementById('src-prd').value='';document.getElementById('fil-cat').value='';renderProdutos();}
 function mostrarTodosEstoque(){_showAllEst=true;renderEstoque();}
 function ocultarEstoque(){_showAllEst=false;document.getElementById('src-est').value='';document.getElementById('fil-est-cat').value='';document.getElementById('fil-est-sit').value='';renderEstoque();}
+// Seleção em lote na tela de Produtos — mesmo padrão já usado em Entregas.
+window._prdSelecionados=window._prdSelecionados||new Set();
+function limparSelecaoProdutos(){
+  window._prdSelecionados=new Set();
+}
+function atualizarBarraLoteProdutos(){
+  const bar=document.getElementById('prd-lote-bar');
+  if(!bar)return;
+  const cnt=window._prdSelecionados.size;
+  bar.style.display=cnt>0?'flex':'none';
+  const cntEl=document.getElementById('prd-lote-cnt');
+  if(cntEl)cntEl.textContent=cnt+' selecionado(s)';
+  const selAll=document.getElementById('prd-sel-all');
+  if(selAll){
+    const itens=Array.from(document.querySelectorAll('.prd-sel-item'));
+    selAll.checked=itens.length>0&&itens.every(i=>i.checked);
+  }
+}
+function toggleSelProduto(id,checked){
+  if(checked)window._prdSelecionados.add(id);
+  else window._prdSelecionados.delete(id);
+  atualizarBarraLoteProdutos();
+}
+function toggleSelAllProdutos(checked){
+  document.querySelectorAll('.prd-sel-item').forEach(function(chk){
+    chk.checked=checked;
+    const id=chk.dataset.id;
+    if(checked)window._prdSelecionados.add(id);
+    else window._prdSelecionados.delete(id);
+  });
+  atualizarBarraLoteProdutos();
+}
+function alterarAlertaEstoqueLote(ativar){
+  const ids=Array.from(window._prdSelecionados);
+  if(!ids.length)return;
+  if(!confirm((ativar?'Ativar':'Desativar')+' monitoramento de estoque crítico em '+ids.length+' produto(s)?'))return;
+  let alterados=0;
+  ids.forEach(function(id){
+    const p=DB.produtos.find(x=>x.id===id);
+    if(!p)return;
+    p.alertaEstoque=ativar;
+    salvarRegistro('produtos',p.id,p);
+    alterados++;
+  });
+  limparSelecaoProdutos();
+  markDirty('produtos');saveDB();renderProdutos();
+  toast('✓ Monitoramento '+(ativar?'ativado':'desativado')+' em '+alterados+' produto(s)!');
+}
 function renderProdutos(){
   populateCats();
   const q=(document.getElementById('src-prd')?.value||'').toLowerCase();
@@ -6411,8 +6479,9 @@ function renderProdutos(){
     const mg=p.preco>0?((p.preco-p.custo)/p.preco*100):0;
     const meta=DB.config.meta||30;
     return`<tr>
+      <td><input type="checkbox" class="prd-sel-item" data-id="${p.id}" onchange="toggleSelProduto('${p.id}',this.checked)" ${window._prdSelecionados&&window._prdSelecionados.has(p.id)?'checked':''}></td>
       <td style="font-family:monospace;font-size:11px;color:var(--mt)">${p.barras||'--'}</td>
-      <td style="font-weight:600">${p.nome}</td>
+      <td style="font-weight:600">${p.nome}${p.alertaEstoque?' <span title="Estoque critico monitorado" style="font-size:10px;background:#ef444420;color:#ef4444;padding:1px 5px;border-radius:4px">⚠</span>':''}</td>
       <td>${tg(p.cat,'#3b82f6','#93c5fd')}</td>
       <td>${fmt(p.custo)}</td>
       <td style="font-weight:700">${fmt(p.preco)}</td>
@@ -6423,7 +6492,8 @@ function renderProdutos(){
         <button class="btn bd bsm" onclick="delProduto('${p.id}')">🗑</button>
       </div></td>
     </tr>`;
-  }).join(''):`<tr><td colspan="8" class="es">Nenhum produto</td></tr>`;
+  }).join(''):`<tr><td colspan="9" class="es">Nenhum produto</td></tr>`;
+  atualizarBarraLoteProdutos();
 }
 function calcMg(){
   const custo=parseFloat(document.getElementById('mp-custo').value)||0;
@@ -6443,6 +6513,7 @@ function _abrirProduto(id){
   ['id','nome','barras','cod','un','obs'].forEach(f=>document.getElementById('mp-'+f).value='');
   document.getElementById('mp-custo').value='';document.getElementById('mp-preco').value='';
   document.getElementById('mp-est').value=0;document.getElementById('mp-estmin').value=5;
+  document.getElementById('mp-alerta-estoque').checked=false;
   document.getElementById('mp-mg-box').style.display='none';
   document.getElementById('mp-tit').textContent='Novo Produto';
   document.querySelectorAll('#md-prd .tab').forEach((t,i)=>t.classList.toggle('active',i===0));
@@ -6456,6 +6527,7 @@ function _abrirProduto(id){
     ['nome','barras','cod','un','obs'].forEach(f=>document.getElementById('mp-'+f).value=p[f]||'');
     document.getElementById('mp-custo').value=p.custo||'';document.getElementById('mp-preco').value=p.preco||'';
     document.getElementById('mp-est').value=p.est||0;document.getElementById('mp-estmin').value=p.estMin||5;
+    document.getElementById('mp-alerta-estoque').checked=!!p.alertaEstoque;
     document.getElementById('mp-cat').value=p.cat||'';document.getElementById('mp-for').value=p.forid||'';
     calcMg();
     window._histProdId=id;
@@ -6547,7 +6619,9 @@ function salvarProduto(){
     cat:document.getElementById('mp-cat').value,un:document.getElementById('mp-un').value||'un',
     forid:document.getElementById('mp-for').value,custo:parseFloat(document.getElementById('mp-custo').value)||0,
     preco,est:parseInt(document.getElementById('mp-est').value)||0,
-    estMin:parseInt(document.getElementById('mp-estmin').value)||5,obs:document.getElementById('mp-obs').value};
+    estMin:parseInt(document.getElementById('mp-estmin').value)||5,
+    alertaEstoque:document.getElementById('mp-alerta-estoque').checked,
+    obs:document.getElementById('mp-obs').value};
   let prodId=id;
   if(id){DB.produtos=DB.produtos.map(p=>p.id===id?{...p,...obj}:p);toast('✓ Produto atualizado');}
   else{prodId=uid();DB.produtos.push({...obj,id:prodId});toast('✓ Produto cadastrado');}
