@@ -2425,6 +2425,8 @@ function loadDB(){
       DB.pedidos=DB.pedidos.map(d=>({pagamentos:[],...d,tipo:d.tipo||(d.st==='orcamento'?'orc':'ped')}));
       // migra statuses antigos (faturado → em-aberto/pago, mesclado → mesclado-aberto/pago)
       DB.pedidos.forEach(d=>{if(d.tipo==='ped')normSt(d);});
+      // corrige orçamentos "convertido" órfãos (pedido resultante perdido na sincronização)
+      if(repararConversoesOrfas()){markDirty('pedidos');saveDB();}
       // garante cliente não identificado
       if(!DB.clientes.find(c=>c.id==='cli-anonimo')){
         DB.clientes.unshift({id:'cli-anonimo',nome:'Cliente Não Identificado',cpf:'',tel:'',email:'',end:'',cidade:'',uf:'',obs:'Consumidor final',lim:0,dt:hj(),anonimo:true});
@@ -3162,6 +3164,31 @@ function isAtivoFat(d){
   // isso evita contar em dobro mesclagens feitas antes desta correção existir.
   const ehMesclagem=d._ehMesclagem||(d.obs&&d.obs.indexOf('MESCLADO de:')===0);
   return!d._excluido&&!ehMesclagem&&(!['cancelado','mesclado','convertido'].includes(d.st));
+}
+// Corrige orçamentos marcados como "convertido" cujo pedido resultante não existe
+// (ex: falha de sincronização perdeu o novo PED, mas o status "convertido" do
+// orçamento original persistiu). Sem isso o valor da venda some silenciosamente
+// do Total Compras/Faturamento, pois um orçamento 'convertido' é excluído dos
+// totais e o PED que deveria substituí-lo nunca chegou a existir. Reverte o
+// orçamento para 'orcamento' (reaberto) para que o valor volte a aparecer e o
+// usuário possa convertê-lo novamente. Idempotente — seguro rodar após cada
+// merge/carregamento. Retorna true se algo foi corrigido.
+function repararConversoesOrfas(){
+  var pedidos=DB.pedidos||[];
+  var numsPedAtivos={};
+  pedidos.forEach(function(p){if(p&&p.tipo==='ped'&&!p._excluido)numsPedAtivos[p.num]=true;});
+  var mudou=false;
+  pedidos.forEach(function(d){
+    if(!d||d.tipo!=='orc'||d.st!=='convertido')return;
+    var m=(d.obs||'').match(/Convertido em (\S+)/);
+    var numNovo=m?m[1]:null;
+    if(numNovo&&numsPedAtivos[numNovo])return; // pedido resultante existe — tudo certo
+    d.st='orcamento';
+    var obsBase=(d.obs||'').replace(/(?:\s*·\s*)?Convertido em \S+\s*$/,'').trim();
+    d.obs=(obsBase?obsBase+' · ':'')+'⚠️ Conversão revertida automaticamente (pedido não encontrado) — converta novamente';
+    mudou=true;
+  });
+  return mudou;
 }
 // Detecta e corrige pedidos com o MESMO número visível (ex: dois "PED-101") mas
 // IDs diferentes — isso acontece quando dois dispositivos/abas criam pedidos ao
@@ -4455,6 +4482,7 @@ function abrirDoc(tipo){
           if(fbPeds.length>=DB.pedidos.length){
             DB.pedidos=mergePedidosSeguro(fbPeds,DB.pedidos);
           }
+          if(repararConversoesOrfas())markDirty('pedidos');
           salvarCacheLocalSeguro();
         }catch(e){console.warn('Sync rápido falhou:',e);}
       }
@@ -12808,6 +12836,7 @@ function syncAntesDe(colecoes, callback){
           const arr2=p2&&p2.exists?JSON.parse(p2.data().pedidos||'[]'):[];
           const fbPeds=[...arr1,...arr2];
           if(fbPeds.length>=DB.pedidos.length)DB.pedidos=mergePedidosSeguro(fbPeds,DB.pedidos);
+          if(repararConversoesOrfas())markDirty('pedidos');
         }catch(e){}
       }
       salvarCacheLocalSeguro();
@@ -13640,6 +13669,7 @@ function migrarPedidosTrimestrais(){
       if(allPeds.length>=DB.pedidos.length){DB.pedidos=mergePedidosSeguro(allPeds,DB.pedidos);mudou=true;
         cmxLog('SYNC','Pedidos carregados',''+allPeds.length+' pedidos de '+docsParaUsar.length+' doc(s)');
       }
+      if(repararConversoesOrfas())markDirty('pedidos');
     }
     // Proteção: só carrega meta_X se Firebase for mais recente que local
     // E nunca reduz quantidade de registros
@@ -13836,6 +13866,7 @@ function iniciarAutoBackup(){
             return Object.values(map);
           }
           DB.pedidos=mergePedidosSeguro(fbPeds,DB.pedidos);
+          if(repararConversoesOrfas())markDirty('pedidos');
           var fbCli=metaCli&&metaCli.exists?JSON.parse(metaCli.data().clientes||'[]'):JSON.parse(m.clientes||'[]');
           DB.clientes=mergeCamposSeguro(fbCli,DB.clientes);
           var fbProds=[];
