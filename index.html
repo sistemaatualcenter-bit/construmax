@@ -697,7 +697,7 @@ select.inp option{background:var(--card2)}
     <div class="card">
       <div id="desp-lote-bar" style="display:none;align-items:center;gap:10px;padding:10px 16px;border-bottom:1px solid var(--br2);flex-wrap:wrap">
         <span id="desp-lote-cnt" style="font-size:12px;color:var(--mt)"></span>
-        <button class="btn bs bsm" onclick="pagarDespesasLote()">✓ Pagar selecionadas</button>
+        <button class="btn bs bsm" onclick="abrirPagDespesaLote()">✓ Pagar selecionadas</button>
         <button class="btn bd bsm" onclick="excluirDespesasLote()">🗑 Excluir selecionadas</button>
         <button class="btn bg bsm" onclick="limparSelecaoDespesas();renderDespesas()">Limpar seleção</button>
       </div>
@@ -1702,6 +1702,45 @@ select.inp option{background:var(--card2)}
     </div>
   </div>
 
+
+  <!-- MODAL PAGAR DESPESA -->
+  <div id="md-desp-pag" class="md" style="display:none;max-width:400px">
+    <div class="mh">
+      <div class="mt2x">💳 Registrar Pagamento</div>
+      <button class="btn bg bsm" onclick="closeMD('desp-pag')">✕</button>
+    </div>
+    <input type="hidden" id="mdp-id">
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <div id="mdp-info" style="background:var(--card2);border-radius:8px;padding:10px;font-size:12px"></div>
+      <div class="fg">
+        <div class="fgrp"><label class="fl">Data Pagamento *</label><input class="inp" id="mdp-dt" type="date"></div>
+        <div class="fgrp"><label class="fl">Valor Pago *</label><input class="inp" id="mdp-valor" type="number" step="0.01"></div>
+      </div>
+      <div class="fgrp"><label class="fl">Observação</label><input class="inp" id="mdp-obs" placeholder="Opcional"></div>
+    </div>
+    <div class="mf">
+      <button class="btn bg" onclick="closeMD('desp-pag')">Cancelar</button>
+      <button class="btn bp" onclick="confirmarPagDespesa()">✓ Confirmar Pagamento</button>
+    </div>
+  </div>
+
+  <!-- MODAL PAGAR DESPESAS EM LOTE -->
+  <div id="md-desp-pag-lote" class="md" style="display:none;max-width:420px">
+    <div class="mh">
+      <div class="mt2x">💳 Registrar Pagamento em Lote</div>
+      <button class="btn bg bsm" onclick="closeMD('desp-pag-lote')">✕</button>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <div id="mdpl-info" style="background:var(--card2);border-radius:8px;padding:10px;font-size:12px"></div>
+      <div style="font-size:11.5px;color:var(--mt)">A mesma data e observação serão aplicadas a todas as despesas selecionadas, cada uma com seu valor integral.</div>
+      <div class="fgrp"><label class="fl">Data Pagamento *</label><input class="inp" id="mdpl-dt" type="date"></div>
+      <div class="fgrp"><label class="fl">Observação (aplicada a todas)</label><input class="inp" id="mdpl-obs" placeholder="Opcional"></div>
+    </div>
+    <div class="mf">
+      <button class="btn bg" onclick="closeMD('desp-pag-lote')">Cancelar</button>
+      <button class="btn bp" onclick="confirmarPagDespesaLote()">✓ Confirmar Pagamento em Lote</button>
+    </div>
+  </div>
   <!-- MODAL CONFIRMAR INVENTÁRIO -->
   <div id="md-inv-conf" class="md" style="display:none;max-width:560px">
     <div class="mh">
@@ -9450,28 +9489,44 @@ function gerarParcelasFixas(d){
 // Relatório) a regra simples de que "pago:true" sempre significa que o
 // campo "valor" inteiro daquela linha foi pago — nenhum outro cálculo
 // financeiro precisa saber sobre pagamento parcial.
-function pagarDespesa(id){
+function abrirPagDespesa(id){
   const d=DB.despesas.find(x=>x.id===id);
   if(!d)return;
-  const entrada=prompt('Valor a pagar (despesa: '+fmt(d.valor)+'):',String(d.valor));
-  if(entrada===null)return; // cancelado
-  const valorPagar=Math.round((parseFloat(String(entrada).replace(',','.'))||0)*100)/100;
+  document.getElementById('mdp-id').value=id;
+  document.getElementById('mdp-dt').value=dtHtml();
+  document.getElementById('mdp-valor').value=d.valor.toFixed(2);
+  document.getElementById('mdp-obs').value='';
+  document.getElementById('mdp-info').innerHTML=
+    '<div style="font-weight:700">'+d.desc+'</div>'
+    +'<div style="font-size:11px;color:var(--mt)">'+(d.cat||'Outros')+(d.venc?' · Vencimento: '+d.venc.split('-').reverse().join('/'):'')+'</div>'
+    +'<div style="font-size:13px;font-weight:700;color:var(--or);margin-top:4px">Valor: '+fmt(d.valor)+'</div>';
+  document.querySelectorAll('.md').forEach(m=>m.style.display='none');
+  document.getElementById('md-desp-pag').style.display='block';
+  document.getElementById('mo').style.display='flex';
+}
+function confirmarPagDespesa(){
+  const id=document.getElementById('mdp-id').value;
+  const d=DB.despesas.find(x=>x.id===id);
+  if(!d)return;
+  const dt=document.getElementById('mdp-dt').value;
+  const valorPagar=Math.round((parseFloat(String(document.getElementById('mdp-valor').value).replace(',','.'))||0)*100)/100;
+  const obs=document.getElementById('mdp-obs').value.trim();
+  if(!dt){toast('⚠ Informe a data','#f59e0b');return;}
   if(!valorPagar||valorPagar<=0){toast('⚠ Valor inválido','#f59e0b');return;}
   if(valorPagar>d.valor+0.01){toast('⚠ Valor maior que a despesa ('+fmt(d.valor)+')','#f59e0b');return;}
   const restante=Math.round((d.valor-valorPagar)*100)/100;
-  if(!confirm('Confirmar pagamento de '+fmt(valorPagar)+(restante>0.01?' (fica '+fmt(restante)+' em aberto)':'')+'?'))return;
   DB.despesas=DB.despesas.map(function(x){
     if(x.id!==id)return x;
     return restante>0.01
-      ?{...x,valor:valorPagar,pago:true,dtPago:dtHtml(),valorPago:valorPagar}
-      :{...x,pago:true,dtPago:dtHtml(),valorPago:x.valor};
+      ?{...x,valor:valorPagar,pago:true,dtPago:dt,valorPago:valorPagar,obsPag:obs}
+      :{...x,pago:true,dtPago:dt,valorPago:x.valor,obsPag:obs};
   });
   if(restante>0.01){
-    DB.despesas.push({...d,id:uid(),valor:restante,pago:false,dtPago:'',valorPago:0,
+    DB.despesas.push({...d,id:uid(),valor:restante,pago:false,dtPago:'',valorPago:0,obsPag:'',
       obs:(d.obs?d.obs+' · ':'')+'Saldo restante de pagamento parcial',dt:hj(),_saldoParcial:true});
   }
   const _ddp=DB.despesas.find(d=>d.id===id);if(_ddp)salvarRegistro('despesas',id,_ddp);
-  markDirty('fin');saveDB();renderDespesas();
+  markDirty('fin');saveDB();closeMD('desp-pag');renderDespesas();
   toast(restante>0.01?'✓ Pagamento parcial registrado — saldo de '+fmt(restante)+' continua em aberto':'✓ Despesa paga','#10b981');
 }
 // Cancela (exclui) as demais parcelas em aberto da mesma despesa fixa —
@@ -9521,19 +9576,44 @@ function toggleSelAllDespesas(checked){
 // Pagamento em lote sempre quita o valor total de cada despesa selecionada
 // (pagamento parcial em lote não faz sentido — valores diferentes por
 // despesa — para isso use "Pagar" individualmente em cada linha).
-function pagarDespesasLote(){
+function abrirPagDespesaLote(){
   const ids=Array.from(window._despSelecionados);
-  if(!ids.length)return;
   const alvo=ids.map(id=>DB.despesas.find(d=>d.id===id)).filter(d=>d&&!d.pago);
   if(!alvo.length){toast('Nenhuma despesa em aberto selecionada','#f59e0b');return;}
   const total=alvo.reduce((s,d)=>s+d.valor,0);
-  if(!confirm('Confirmar pagamento total de '+alvo.length+' despesa(s) — '+fmt(total)+'?'))return;
+  document.getElementById('mdpl-info').innerHTML=
+    '<div style="font-weight:700">'+alvo.length+' despesa(s) selecionada(s)</div>'
+    +'<div style="font-size:11px;color:var(--mt);margin-top:4px;max-height:120px;overflow-y:auto">'
+    +alvo.map(d=>d.desc+' — '+fmt(d.valor)).join('<br>')
+    +'</div>'
+    +'<div style="font-size:14px;font-weight:700;color:var(--or);margin-top:6px">Total: '+fmt(total)+'</div>';
+  document.getElementById('mdpl-dt').value=dtHtml();
+  document.getElementById('mdpl-obs').value='';
+  document.querySelectorAll('.md').forEach(m=>m.style.display='none');
+  document.getElementById('md-desp-pag-lote').style.display='block';
+  document.getElementById('mo').style.display='flex';
+}
+// Pagamento em lote sempre quita o valor total de cada despesa selecionada
+// (pagamento parcial em lote não faz sentido — valores diferentes por
+// despesa — para isso use "Pagar" individualmente em cada linha).
+function confirmarPagDespesaLote(){
+  const dt=document.getElementById('mdpl-dt').value;
+  const obs=document.getElementById('mdpl-obs').value.trim();
+  if(!dt){toast('⚠ Informe a data','#f59e0b');return;}
+  const ids=Array.from(window._despSelecionados);
+  const alvo=ids.map(id=>DB.despesas.find(d=>d.id===id)).filter(d=>d&&!d.pago);
+  if(!alvo.length){toast('Nenhuma despesa em aberto selecionada','#f59e0b');return;}
+  const total=alvo.reduce((s,d)=>s+d.valor,0);
   const idsAlvo=new Set(alvo.map(d=>d.id));
   DB.despesas=DB.despesas.map(function(d){
-    return idsAlvo.has(d.id)?{...d,pago:true,dtPago:dtHtml(),valorPago:d.valor}:d;
+    return idsAlvo.has(d.id)?{...d,pago:true,dtPago:dt,valorPago:d.valor,obsPag:obs}:d;
+  });
+  idsAlvo.forEach(function(id){
+    const d=DB.despesas.find(x=>x.id===id);
+    if(d)salvarRegistro('despesas',id,d);
   });
   limparSelecaoDespesas();
-  markDirty('fin');saveDB();renderDespesas();
+  markDirty('fin');saveDB();closeMD('desp-pag-lote');renderDespesas();
   toast('✓ '+alvo.length+' despesa(s) paga(s) — '+fmt(total),'#10b981');
 }
 function excluirDespesasLote(){
@@ -9627,6 +9707,8 @@ function renderDespesas(){
     const corBorda=d.pago?'#10b981':vencido?'#ef4444':'#3b82f6';
     const stHtml=d.pago
       ?'<span style="background:#10b98120;color:#10b981;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:700">✓ Pago</span>'
+      +(d.dtPago?'<div style="font-size:10px;color:var(--mt);margin-top:3px">em '+d.dtPago.split('-').reverse().join('/')+'</div>':'')
+      +(d.obsPag?'<div title="Observação do pagamento" style="font-size:10px;color:#10b981;margin-top:1px">💬 '+d.obsPag+'</div>':'')
       :vencido?'<span style="background:#ef444420;color:#ef4444;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:700">⚠ Vencida</span>'
       :'<span style="background:#3b82f620;color:#3b82f6;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:700">Em Aberto</span>';
     const parcialTag=d._saldoParcial?'<span title="Saldo restante de pagamento parcial" style="font-size:10px;color:#f59e0b;margin-left:5px">(parcial)</span>':'';
@@ -9641,7 +9723,7 @@ function renderDespesas(){
       +'<td>'+stHtml+'</td>'
       +'<td style="font-size:11px;color:var(--mt)">'+(d.tipo==='fixa'?'Todo mês dia '+d.diaVenc:'--')+'</td>'
       +'<td><div style="display:flex;gap:4px;flex-wrap:wrap">'
-      +(!d.pago?'<button class="btn bp bsm" onclick="pagarDespesa(\''+d.id+'\')" style="font-size:11px">✓ Pagar</button>':'')
+      +(!d.pago?'<button class="btn bp bsm" onclick="abrirPagDespesa(\''+d.id+'\')" style="font-size:11px">✓ Pagar</button>':'')
       +'<button class="btn bg bsm" onclick="abrirDespesa(\''+d.tipo+'\',\''+d.id+'\')">✎</button>'
       +'<button class="btn bd bsm" onclick="delDespesa(\''+d.id+'\')">🗑</button>'
       +(temIrmasAbertas?'<button class="btn bg bsm" title="Cancelar as demais parcelas futuras desta despesa fixa" onclick="cancelarDemaisParcelas(\''+d.id+'\')" style="font-size:11px">⏹ Parar recorrência</button>':'')
