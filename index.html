@@ -669,27 +669,40 @@ select.inp option{background:var(--card2)}
   <!-- ABA DESPESAS -->
   <div id="fin-aba-despesas" style="display:none">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
-      <div style="display:flex;gap:8px">
-        <select class="inp" style="width:145px" id="desp-fil-tipo" onchange="renderDespesas()">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <input class="inp" style="width:180px" id="desp-fil-busca" placeholder="🔍 Buscar descrição..." oninput="renderDespesas()">
+        <select class="inp" style="width:130px" id="desp-fil-tipo" onchange="renderDespesas()">
           <option value="">Todas</option>
           <option value="fixa">Fixas</option>
           <option value="avulsa">Avulsas</option>
         </select>
-        <select class="inp" style="width:145px" id="desp-fil-st" onchange="renderDespesas()">
+        <select class="inp" style="width:130px" id="desp-fil-st" onchange="renderDespesas()">
           <option value="">Todos status</option>
           <option value="aberto">Em Aberto</option>
           <option value="pago">Pagas</option>
         </select>
+        <span style="font-size:11px;color:var(--mt)">Vencimento:</span>
+        <input class="inp" type="date" style="width:135px" id="desp-fil-ini" onchange="renderDespesas()">
+        <span style="font-size:11px;color:var(--mt)">até</span>
+        <input class="inp" type="date" style="width:135px" id="desp-fil-fim" onchange="renderDespesas()">
+        <button class="btn bg bsm" onclick="limparFiltrosDespesas()">✕ Limpar filtros</button>
       </div>
       <div style="display:flex;gap:8px">
         <button class="btn bg bsm" onclick="abrirDespesa('fixa')" style="color:#3b82f6;border-color:#3b82f6">+ Despesa Fixa</button>
         <button class="btn bp bsm" onclick="abrirDespesa('avulsa')">+ Despesa Avulsa</button>
       </div>
     </div>
-    <div class="kg" id="desp-kpis" style="grid-template-columns:repeat(4,1fr);margin-bottom:16px"></div>
+    <div class="kg" id="desp-kpis" style="grid-template-columns:repeat(4,1fr);margin-bottom:12px"></div>
+    <div id="desp-cat-totais" style="margin-bottom:16px"></div>
     <div class="card">
+      <div id="desp-lote-bar" style="display:none;align-items:center;gap:10px;padding:10px 16px;border-bottom:1px solid var(--br2);flex-wrap:wrap">
+        <span id="desp-lote-cnt" style="font-size:12px;color:var(--mt)"></span>
+        <button class="btn bs bsm" onclick="pagarDespesasLote()">✓ Pagar selecionadas</button>
+        <button class="btn bd bsm" onclick="excluirDespesasLote()">🗑 Excluir selecionadas</button>
+        <button class="btn bg bsm" onclick="limparSelecaoDespesas();renderDespesas()">Limpar seleção</button>
+      </div>
       <div class="tw"><table>
-        <thead><tr><th>Descrição</th><th>Categoria</th><th>Tipo</th><th>Valor</th><th>Vencimento</th><th>Status</th><th>Recorrência</th><th>Ações</th></tr></thead>
+        <thead><tr><th style="width:32px"><input type="checkbox" id="desp-sel-all" onchange="toggleSelAllDespesas(this.checked)"></th><th>Descrição</th><th>Categoria</th><th>Tipo</th><th>Valor</th><th>Vencimento</th><th>Status</th><th>Recorrência</th><th>Ações</th></tr></thead>
         <tbody id="desp-tbody"></tbody>
       </table></div>
     </div>
@@ -9402,10 +9415,14 @@ function salvarDespesa(){
     DB.despesas=DB.despesas.map(function(d){return d.id===id?{...d,...obj}:d;});
     toast('✓ Despesa atualizada');
   } else {
-    DB.despesas.push({...obj,id:uid(),dt:hj()});
+    // Despesas fixas recebem um serieId compartilhado por todas as parcelas
+    // geradas — usado para permitir cancelar de uma vez as parcelas futuras
+    // ainda em aberto caso o gasto fixo seja interrompido.
+    const serieId=tipo==='fixa'?uid():null;
+    DB.despesas.push({...obj,id:uid(),dt:hj(),serieId});
     // Se for fixa, gera lançamentos para os próximos 12 meses
     if(tipo==='fixa'){
-      gerarParcelasFixas({...obj,id:uid()+'_fx'});
+      gerarParcelasFixas({...obj,serieId});
       toast('✓ Despesa fixa criada — lançamentos gerados','#10b981');
     } else {
       toast('✓ Despesa registrada');
@@ -9426,14 +9443,113 @@ function gerarParcelasFixas(d){
     DB.despesas.push({...d,id:uid(),venc:dtStr,dt:hj(),pago:false,dtPago:'',valorPago:0,_gerado:true});
   }
 }
+// Paga uma despesa — suporta pagamento parcial: se o valor informado for
+// menor que o valor total, esta linha é reduzida ao valor efetivamente pago
+// (e marcada como paga) e uma NOVA linha é criada com o saldo restante em
+// aberto. Isso preserva em todo o resto do sistema (DRE, Fluxo de Caixa,
+// Relatório) a regra simples de que "pago:true" sempre significa que o
+// campo "valor" inteiro daquela linha foi pago — nenhum outro cálculo
+// financeiro precisa saber sobre pagamento parcial.
 function pagarDespesa(id){
-  if(!confirm('Confirmar pagamento desta despesa?'))return;
-  DB.despesas=DB.despesas.map(function(d){
-    if(d.id!==id)return d;
-    return{...d,pago:true,dtPago:dtHtml(),valorPago:d.valor};
+  const d=DB.despesas.find(x=>x.id===id);
+  if(!d)return;
+  const entrada=prompt('Valor a pagar (despesa: '+fmt(d.valor)+'):',String(d.valor));
+  if(entrada===null)return; // cancelado
+  const valorPagar=Math.round((parseFloat(String(entrada).replace(',','.'))||0)*100)/100;
+  if(!valorPagar||valorPagar<=0){toast('⚠ Valor inválido','#f59e0b');return;}
+  if(valorPagar>d.valor+0.01){toast('⚠ Valor maior que a despesa ('+fmt(d.valor)+')','#f59e0b');return;}
+  const restante=Math.round((d.valor-valorPagar)*100)/100;
+  if(!confirm('Confirmar pagamento de '+fmt(valorPagar)+(restante>0.01?' (fica '+fmt(restante)+' em aberto)':'')+'?'))return;
+  DB.despesas=DB.despesas.map(function(x){
+    if(x.id!==id)return x;
+    return restante>0.01
+      ?{...x,valor:valorPagar,pago:true,dtPago:dtHtml(),valorPago:valorPagar}
+      :{...x,pago:true,dtPago:dtHtml(),valorPago:x.valor};
   });
+  if(restante>0.01){
+    DB.despesas.push({...d,id:uid(),valor:restante,pago:false,dtPago:'',valorPago:0,
+      obs:(d.obs?d.obs+' · ':'')+'Saldo restante de pagamento parcial',dt:hj(),_saldoParcial:true});
+  }
   const _ddp=DB.despesas.find(d=>d.id===id);if(_ddp)salvarRegistro('despesas',id,_ddp);
-  markDirty('fin');saveDB();renderDespesas();toast('✓ Despesa paga','#10b981');
+  markDirty('fin');saveDB();renderDespesas();
+  toast(restante>0.01?'✓ Pagamento parcial registrado — saldo de '+fmt(restante)+' continua em aberto':'✓ Despesa paga','#10b981');
+}
+// Cancela (exclui) as demais parcelas em aberto da mesma despesa fixa —
+// usado quando o gasto recorrente é interrompido e não faz sentido manter
+// as 11 parcelas futuras já geradas automaticamente.
+function cancelarDemaisParcelas(id){
+  const d=DB.despesas.find(x=>x.id===id);
+  if(!d||!d.serieId)return;
+  const irmas=semExcluidos(DB.despesas).filter(x=>x.serieId===d.serieId&&x.id!==id&&!x.pago);
+  if(!irmas.length){toast('Não há outras parcelas em aberto desta despesa fixa','#f59e0b');return;}
+  if(!confirm('Cancelar as outras '+irmas.length+' parcela(s) futuras desta despesa fixa?\nParcelas já pagas não são afetadas.'))return;
+  const idsIrmas=new Set(irmas.map(x=>x.id));
+  DB.despesas=DB.despesas.map(function(x){return idsIrmas.has(x.id)?{...x,_excluido:true}:x;});
+  markDirty('fin');saveDB();renderDespesas();
+  toast('✓ '+irmas.length+' parcela(s) futura(s) cancelada(s)','#ef4444');
+}
+// ── Seleção em lote — mesmo padrão já usado em Produtos/Entregas ──
+window._despSelecionados=window._despSelecionados||new Set();
+function limparSelecaoDespesas(){window._despSelecionados=new Set();}
+function atualizarBarraLoteDespesas(){
+  const bar=document.getElementById('desp-lote-bar');
+  if(!bar)return;
+  const cnt=window._despSelecionados.size;
+  bar.style.display=cnt>0?'flex':'none';
+  const cntEl=document.getElementById('desp-lote-cnt');
+  if(cntEl)cntEl.textContent=cnt+' selecionada(s)';
+  const selAll=document.getElementById('desp-sel-all');
+  if(selAll){
+    const itens=Array.from(document.querySelectorAll('.desp-sel-item'));
+    selAll.checked=itens.length>0&&itens.every(i=>i.checked);
+  }
+}
+function toggleSelDespesa(id,checked){
+  if(checked)window._despSelecionados.add(id);
+  else window._despSelecionados.delete(id);
+  atualizarBarraLoteDespesas();
+}
+function toggleSelAllDespesas(checked){
+  document.querySelectorAll('.desp-sel-item').forEach(function(chk){
+    chk.checked=checked;
+    const id=chk.dataset.id;
+    if(checked)window._despSelecionados.add(id);
+    else window._despSelecionados.delete(id);
+  });
+  atualizarBarraLoteDespesas();
+}
+// Pagamento em lote sempre quita o valor total de cada despesa selecionada
+// (pagamento parcial em lote não faz sentido — valores diferentes por
+// despesa — para isso use "Pagar" individualmente em cada linha).
+function pagarDespesasLote(){
+  const ids=Array.from(window._despSelecionados);
+  if(!ids.length)return;
+  const alvo=ids.map(id=>DB.despesas.find(d=>d.id===id)).filter(d=>d&&!d.pago);
+  if(!alvo.length){toast('Nenhuma despesa em aberto selecionada','#f59e0b');return;}
+  const total=alvo.reduce((s,d)=>s+d.valor,0);
+  if(!confirm('Confirmar pagamento total de '+alvo.length+' despesa(s) — '+fmt(total)+'?'))return;
+  const idsAlvo=new Set(alvo.map(d=>d.id));
+  DB.despesas=DB.despesas.map(function(d){
+    return idsAlvo.has(d.id)?{...d,pago:true,dtPago:dtHtml(),valorPago:d.valor}:d;
+  });
+  limparSelecaoDespesas();
+  markDirty('fin');saveDB();renderDespesas();
+  toast('✓ '+alvo.length+' despesa(s) paga(s) — '+fmt(total),'#10b981');
+}
+function excluirDespesasLote(){
+  const ids=Array.from(window._despSelecionados);
+  if(!ids.length)return;
+  if(!confirm('Excluir '+ids.length+' despesa(s) selecionada(s)?'))return;
+  const idsSet=new Set(ids);
+  DB.despesas=DB.despesas.map(function(d){return idsSet.has(d.id)?{...d,_excluido:true}:d;});
+  limparSelecaoDespesas();
+  markDirty('fin');saveDB();renderDespesas();
+  toast(ids.length+' despesa(s) excluída(s)','#ef4444');
+}
+function limparFiltrosDespesas(){
+  ['desp-fil-busca','desp-fil-ini','desp-fil-fim'].forEach(id=>{const e=document.getElementById(id);if(e)e.value='';});
+  ['desp-fil-tipo','desp-fil-st'].forEach(id=>{const e=document.getElementById(id);if(e)e.value='';});
+  renderDespesas();
 }
 function delDespesa(id){
   if(!confirm('Remover esta despesa?'))return;
@@ -9445,15 +9561,33 @@ function renderDespesas(){
   if(!DB.despesas)DB.despesas=[];
   const filTipo=document.getElementById('desp-fil-tipo')?.value||'';
   const filSt=document.getElementById('desp-fil-st')?.value||'';
+  const filBusca=(document.getElementById('desp-fil-busca')?.value||'').trim().toLowerCase();
+  const filIni=document.getElementById('desp-fil-ini')?.value||'';
+  const filFim=document.getElementById('desp-fil-fim')?.value||'';
   const hoje=new Date();hoje.setHours(0,0,0,0);
-  const lista=semExcluidos(DB.despesas).filter(function(d){
+  const base=semExcluidos(DB.despesas);
+  const lista=base.filter(function(d){
     if(filTipo&&d.tipo!==filTipo)return false;
     if(filSt==='pago'&&!d.pago)return false;
     if(filSt==='aberto'&&d.pago)return false;
+    if(filBusca&&!(d.desc||'').toLowerCase().includes(filBusca))return false;
+    if(filIni&&(d.venc||'')<filIni)return false;
+    if(filFim&&(d.venc||'')>filFim)return false;
     return true;
-  }).sort(function(a,b){return(a.venc||'').localeCompare(b.venc||'');});
+  }).sort(function(a,b){
+    // Vencidas primeiro, depois em aberto (por vencimento mais próximo), pagas por último
+    function rank(d){
+      if(!d.pago&&d.venc&&d.venc<hj())return 0; // vencida
+      if(!d.pago)return 1; // em aberto
+      return 2; // paga
+    }
+    const ra=rank(a),rb=rank(b);
+    if(ra!==rb)return ra-rb;
+    if(ra===2)return(b.dtPago||b.venc||'').localeCompare(a.dtPago||a.venc||''); // pagas: mais recente primeiro
+    return(a.venc||'').localeCompare(b.venc||''); // vencidas/abertas: vencimento mais próximo primeiro
+  });
 
-  // KPIs
+  // KPIs (sempre sobre o total, não sobre o filtro — visão geral da situação)
   const totalMes=DB.despesas.filter(function(d){
     const m=d.venc?d.venc.slice(0,7):'';
     return m===hj().slice(0,7);
@@ -9469,6 +9603,22 @@ function renderDespesas(){
     {l:'Total Pago',v:fmt(totalPago),c:'#10b981',s:DB.despesas.filter(d=>d.pago).length+' despesa(s)'},
   ].map(function(k){return'<div class="kpi"><div class="kv" style="color:'+k.c+'">'+k.v+'</div><div class="kl">'+k.l+'</div><div class="ks">'+k.s+'</div></div>';}).join('');
 
+  // Totais por categoria — respeita os filtros atuais (mostra o que está sendo visto na lista)
+  const catTotaisEl=document.getElementById('desp-cat-totais');
+  if(catTotaisEl){
+    const porCat={};
+    lista.forEach(function(d){const c=d.cat||'Outros';porCat[c]=(porCat[c]||0)+d.valor;});
+    const entradas=Object.entries(porCat).sort(function(a,b){return b[1]-a[1];});
+    catTotaisEl.innerHTML=entradas.length?'<div style="display:flex;gap:8px;flex-wrap:wrap">'
+      +entradas.map(function([cat,v]){
+        return'<div style="background:var(--card2);border-radius:7px;padding:6px 12px;font-size:12px"><span style="color:var(--mt)">'+cat+':</span> <strong>'+fmt(v)+'</strong></div>';
+      }).join('')+'</div>':'';
+  }
+
+  // Limpa seleção de itens que saíram da lista filtrada (evita "fantasmas" selecionados fora de vista)
+  const idsVisiveis=new Set(lista.map(d=>d.id));
+  Array.from(window._despSelecionados).forEach(function(id){if(!idsVisiveis.has(id))window._despSelecionados.delete(id);});
+
   const tbody=document.getElementById('desp-tbody');
   if(!tbody)return;
   tbody.innerHTML=lista.length?lista.map(function(d){
@@ -9479,21 +9629,26 @@ function renderDespesas(){
       ?'<span style="background:#10b98120;color:#10b981;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:700">✓ Pago</span>'
       :vencido?'<span style="background:#ef444420;color:#ef4444;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:700">⚠ Vencida</span>'
       :'<span style="background:#3b82f620;color:#3b82f6;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:700">Em Aberto</span>';
+    const parcialTag=d._saldoParcial?'<span title="Saldo restante de pagamento parcial" style="font-size:10px;color:#f59e0b;margin-left:5px">(parcial)</span>':'';
+    const temIrmasAbertas=d.tipo==='fixa'&&d.serieId&&base.some(x=>x.serieId===d.serieId&&x.id!==d.id&&!x.pago);
     return'<tr style="border-left:3px solid '+corBorda+'">'
-      +'<td style="font-weight:600">'+d.desc+'</td>'
+      +'<td><input type="checkbox" class="desp-sel-item" data-id="'+d.id+'" onchange="toggleSelDespesa(\''+d.id+'\',this.checked)" '+(window._despSelecionados.has(d.id)?'checked':'')+'></td>'
+      +'<td style="font-weight:600">'+d.desc+parcialTag+'</td>'
       +'<td style="font-size:12px;color:var(--mt)">'+d.cat+'</td>'
       +'<td><span style="font-size:11px;background:'+(d.tipo==='fixa'?'#3b82f620':'#a78bfa20')+';color:'+(d.tipo==='fixa'?'#3b82f6':'#a78bfa')+';padding:2px 7px;border-radius:5px">'+(d.tipo==='fixa'?'Fixa':'Avulsa')+'</span></td>'
       +'<td style="font-weight:700">'+fmt(d.valor)+'</td>'
       +'<td style="color:var(--mt)">'+(d.venc?d.venc.split('-').reverse().join('/'):'--')+'</td>'
       +'<td>'+stHtml+'</td>'
       +'<td style="font-size:11px;color:var(--mt)">'+(d.tipo==='fixa'?'Todo mês dia '+d.diaVenc:'--')+'</td>'
-      +'<td><div style="display:flex;gap:4px">'
+      +'<td><div style="display:flex;gap:4px;flex-wrap:wrap">'
       +(!d.pago?'<button class="btn bp bsm" onclick="pagarDespesa(\''+d.id+'\')" style="font-size:11px">✓ Pagar</button>':'')
       +'<button class="btn bg bsm" onclick="abrirDespesa(\''+d.tipo+'\',\''+d.id+'\')">✎</button>'
       +'<button class="btn bd bsm" onclick="delDespesa(\''+d.id+'\')">🗑</button>'
+      +(temIrmasAbertas?'<button class="btn bg bsm" title="Cancelar as demais parcelas futuras desta despesa fixa" onclick="cancelarDemaisParcelas(\''+d.id+'\')" style="font-size:11px">⏹ Parar recorrência</button>':'')
       +'</div></td>'
       +'</tr>';
-  }).join(''):'<tr><td colspan="8" class="es">Nenhuma despesa cadastrada</td></tr>';
+  }).join(''):'<tr><td colspan="9" class="es">Nenhuma despesa encontrada'+((filTipo||filSt||filBusca||filIni||filFim)?' com os filtros atuais':'')+'</td></tr>';
+  atualizarBarraLoteDespesas();
 }
 function limparRelDesp(){
   document.getElementById('rel-desp-ini').value='';
@@ -10574,6 +10729,11 @@ function renderFinanceiro(){
   const aRec=vendas.filter(d=>isAtivo(d)&&docSaldo(d)>0).reduce((s,d)=>s+docSaldo(d),0);
   const totalPago=vendas.reduce((s,d)=>s+docPago(d),0);
   const meta=DB.config.meta||30;
+  // Despesas em aberto — visível aqui no Resumo (antes só aparecia dentro da
+  // sub-aba "Despesas"), para não passar despercebido no painel principal.
+  const despAberto=(DB.despesas||[]).filter(d=>!d._excluido&&!d.pago);
+  const despAbertoTotal=despAberto.reduce((s,d)=>s+d.valor,0);
+  const despVencidas=despAberto.filter(d=>d.venc&&d.venc<hj()).length;
   document.getElementById('fin-kpis').innerHTML=[
     {l:'Faturamento Bruto',v:fmt(totalB),c:'#f97316'},
     {l:'Faturamento Líquido',v:fmt(totalLiq),c:'#f59e0b',s:totalTaxas>0?'Taxas e repasses: -'+fmt(totalTaxas):''},
@@ -10581,7 +10741,8 @@ function renderFinanceiro(){
     {l:'Margem',v:fmtP(mg),c:'#a78bfa'},
     {l:'A Receber',v:fmt(aRec),c:'#3b82f6'},
     {l:'Total Recebido',v:fmt(totalPago),c:'#10b981'},
-  ].map(k=>`<div class="kpi"><div class="kv" style="color:${k.c}">${k.v}</div><div class="kl">${k.l}</div>${k.s?`<div class="ks" style="color:#ef4444">${k.s}</div>`:''}</div>`).join('');
+    {l:'Despesas em Aberto',v:fmt(despAbertoTotal),c:'#ef4444',s:despAberto.length+' despesa(s)'+(despVencidas?' · '+despVencidas+' vencida(s)':'')},
+  ].map(k=>`<div class="kpi"><div class="kv" style="color:${k.c}">${k.v}</div><div class="kl">${k.l}</div>${k.s?`<div class="ks" style="color:${k.l==='Despesas em Aberto'?'var(--mt)':'#ef4444'}">${k.s}</div>`:''}</div>`).join('');
   const pm={};vendasFat.forEach(d=>{pm[d.pag]=(pm[d.pag]||0)+d.total;});
   document.getElementById('fin-pags').innerHTML=Object.entries(pm).sort((a,b)=>b[1]-a[1]).map(([k,v])=>{
     const pct=totalB>0?(v/totalB)*100:0;
