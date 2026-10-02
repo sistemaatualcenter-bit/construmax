@@ -1374,11 +1374,19 @@ select.inp option{background:var(--card2)}
       </div>
     </div>
     <div class="card cp">
-      <div class="stl">Categorias</div>
+      <div class="stl">Categorias de Produtos</div>
       <div id="cfg-cats"></div>
       <div style="display:flex;gap:8px;margin-top:10px">
         <input class="inp" id="cfg-cat-new" placeholder="Nova categoria...">
         <button class="btn bs" onclick="addCat()">+ Add</button>
+      </div>
+    </div>
+    <div class="card cp">
+      <div class="stl">Categorias de Despesas</div>
+      <div id="cfg-cats-desp"></div>
+      <div style="display:flex;gap:8px;margin-top:10px">
+        <input class="inp" id="cfg-cat-desp-new" placeholder="Nova categoria...">
+        <button class="btn bs" onclick="addCatDespesa()">+ Add</button>
       </div>
     </div>
   </div>
@@ -1672,26 +1680,18 @@ select.inp option{background:var(--card2)}
       <div class="fg">
         <div class="fgrp">
           <label class="fl">Categoria</label>
-          <select class="inp" id="md-desp-cat">
-            <option value="Aluguel">Aluguel</option>
-            <option value="Energia">Energia</option>
-            <option value="Água">Água</option>
-            <option value="Internet">Internet</option>
-            <option value="Telefone">Telefone</option>
-            <option value="Funcionários">Funcionários</option>
-            <option value="Fornecedor">Fornecedor</option>
-            <option value="Manutenção">Manutenção</option>
-            <option value="Impostos">Impostos</option>
-            <option value="Outros">Outros</option>
-          </select>
+          <select class="inp" id="md-desp-cat"></select>
         </div>
         <div class="fgrp"><label class="fl">Valor *</label><input class="inp" id="md-desp-valor" type="number" step="0.01" placeholder="0,00"></div>
       </div>
       <div class="fg">
         <div class="fgrp"><label class="fl">Data / Vencimento *</label><input class="inp" id="md-desp-venc" type="date"></div>
         <div id="md-desp-rec-wrap" class="fgrp" style="display:none">
-          <label class="fl">Dia de vencimento</label>
-          <input class="inp" id="md-desp-dia" type="number" min="1" max="28" placeholder="Ex: 10" value="10">
+          <label class="fl">Recorrência</label>
+          <div style="display:flex;gap:8px">
+            <div style="flex:1"><label class="fl" style="font-size:10px">Dia de vencimento</label><input class="inp" id="md-desp-dia" type="number" min="1" max="28" placeholder="Ex: 10" value="10"></div>
+            <div style="flex:1"><label class="fl" style="font-size:10px">Qtd. parcelas</label><input class="inp" id="md-desp-parcelas" type="number" min="1" max="120" placeholder="12" value="12"></div>
+          </div>
         </div>
       </div>
       <div class="fgrp"><label class="fl">Observação</label><input class="inp" id="md-desp-obs" placeholder="Opcional"></div>
@@ -2077,7 +2077,12 @@ select.inp option{background:var(--card2)}
       <div id="mver-pag-lista" style="margin-bottom:10px"></div>
       <div class="fg">
         <div class="fgrp"><label class="fl">Data</label><input class="inp" id="mpag-dt" type="date" style="width:150px"></div>
-        <div class="fgrp"><label class="fl">Valor (R$)</label><input class="inp" id="mpag-valor" type="number" step="0.01" min="0.01" placeholder="0,00"></div>
+        <div class="fgrp"><label class="fl">Valor (R$)</label>
+          <div style="display:flex;gap:6px">
+            <input class="inp" id="mpag-valor" type="number" step="0.01" min="0.01" placeholder="0,00">
+            <button type="button" class="btn bg bsm" id="mpag-btn-saldo" style="white-space:nowrap" onclick="preencherValorSaldo()" title="Preencher com o valor devedor do pedido">💰 Usar saldo</button>
+          </div>
+        </div>
         <div class="fgrp"><label class="fl">Forma</label>
           <select class="inp" id="mpag-forma"><option>pix</option><option>dinheiro</option><option>cartão crédito</option><option>cartão débito</option><option>cheque</option></select>
         </div>
@@ -2436,6 +2441,7 @@ const KEY_XML_RASCUNHO='cmx4_xml_rascunho';
 let DB={
   clientes:[],produtos:[],pedidos:[],fornecedores:[],entradas:[],devolucoes:[],
   categorias:['Cimento','Alvenaria','Agregados','Aço','Tintas','Cobertura','Elétrico','Hidráulico','Ferramentas','Outros'],
+  categoriasDespesas:['Aluguel','Energia','Água','Internet','Telefone','Funcionários','Fornecedor','Manutenção','Impostos','Outros'],
   config:{nome:'CONSTRUMAX',end:'',tel:'',cnpj:'',rodape:'Obrigado pela preferência!',meta:30,catDestaque:'Grosseiro'},
   seq:{ped:1,orc:1,ent:1,dev:1},
 };
@@ -2449,6 +2455,7 @@ function loadDB(){
       if(!DB.seq.dev)DB.seq.dev=1;
       ['fornecedores','entradas','devolucoes'].forEach(k=>{if(!DB[k])DB[k]=[];});
       if(!DB.categorias)DB.categorias=['Cimento','Alvenaria','Agregados','Aço','Tintas','Cobertura','Elétrico','Hidráulico','Ferramentas','Outros'];
+      if(!DB.categoriasDespesas)DB.categoriasDespesas=['Aluguel','Energia','Água','Internet','Telefone','Funcionários','Fornecedor','Manutenção','Impostos','Outros'];
       if(!DB.familias)DB.familias=[];
       if(!DB.boletos)DB.boletos=[];
       if(!DB.despesas)DB.despesas=[];
@@ -2850,7 +2857,7 @@ function salvarNaNuvem(ts){
   var peds = DB.pedidos||[];
   var pedsByQ={};
   peds.forEach(function(p){var k=getPedidosDocKey(p.dtISO||p.dt||'');if(!pedsByQ[k])pedsByQ[k]=[];pedsByQ[k].push(p);});
-  var meta={ts:timestamp,config:JSON.stringify(DB.config||{}),seq:JSON.stringify(DB.seq||{}),categorias:JSON.stringify(DB.categorias||[]),familias:JSON.stringify(DB.familias||[]),campanhas:JSON.stringify(DB.campanhas||[])};
+  var meta={ts:timestamp,config:JSON.stringify(DB.config||{}),seq:JSON.stringify(DB.seq||{}),categorias:JSON.stringify(DB.categorias||[]),categoriasDespesas:JSON.stringify(DB.categoriasDespesas||[]),familias:JSON.stringify(DB.familias||[]),campanhas:JSON.stringify(DB.campanhas||[])};
   var metaClientes={clientes:JSON.stringify(DB.clientes||[]),ts:timestamp};
   var metaFin={boletos:JSON.stringify(DB.boletos||[]),despesas:JSON.stringify(DB.despesas||[]),ts:timestamp};
   var metaOp={fornecedores:JSON.stringify(DB.fornecedores||[]),entradas:JSON.stringify(DB.entradas||[]),devolucoes:JSON.stringify(DB.devolucoes||[]),parceiros:JSON.stringify(DB.parceiros||[]),tarefas:JSON.stringify(DB.tarefas||[]),xmlMemoria:JSON.stringify(DB.xmlMemoria||'{}'),ts:timestamp};
@@ -4329,6 +4336,28 @@ function renderFichaCliente(id,filtSt){
     }</tbody>${filtro==='aberto'&&peds.length?'<tfoot><tr style="font-weight:800;background:var(--card2)"><td colspan="5" style="text-align:right;font-size:13px">TOTAL EM ABERTO:</td><td>'+fmt(peds.reduce(function(s,d){return s+d.total;},0))+'</td><td style="color:var(--gn)">'+fmt(peds.reduce(function(s,d){return s+docPago(d);},0))+'</td><td style="color:#ef4444">'+fmt(aRec)+'</td><td></td></tr></tfoot>':''}</table></div>`:`<div class="es">Nenhum pedido neste filtro</div>`}`;
 }
 
+// Atualiza o nome do cliente já gravado em pedidos/orçamentos e devoluções
+// antigos quando o cadastro é renomeado. Esses documentos guardam uma cópia
+// do nome no momento em que foram criados (para o recibo ficar fiel à venda),
+// então sem isso a busca por nome e o ranking do Dashboard continuariam
+// mostrando o nome antigo até o cliente fazer uma compra nova. Só troca o
+// texto de exibição — não mexe em valor, ID, vínculo ou qualquer outro dado.
+function atualizarNomeClienteEmDocumentos(cliId,novoNome){
+  let nPed=0,nOp=0;
+  DB.pedidos=DB.pedidos.map(function(d){
+    if(d.cliId!==cliId||d.cliNome===novoNome)return d;
+    nPed++;
+    return{...d,cliNome:novoNome};
+  });
+  DB.devolucoes=(DB.devolucoes||[]).map(function(d){
+    if(d.cliId!==cliId||d.cliNome===novoNome)return d;
+    nOp++;
+    return{...d,cliNome:novoNome};
+  });
+  if(nPed)markDirty('pedidos');
+  if(nOp)markDirty('op');
+  return nPed+nOp;
+}
 function salvarCliente(){
   const nome=document.getElementById('mc-nome').value.trim();
   if(!nome){toast('⚠ Informe o nome','#f59e0b');return;}
@@ -4340,9 +4369,15 @@ function salvarCliente(){
     endEntrega:document.getElementById('mc-end-entrega').value,
     indicadores:getIndicadoresSelecionados()};
   let cliId=id;
+  let docsAtualizados=0;
   if(id){
+    const cliAntes=DB.clientes.find(c=>c.id===id);
+    const nomeAntigo=cliAntes?cliAntes.nome:null;
     DB.clientes=DB.clientes.map(c=>c.id===id?{...c,...obj}:c);
-    toast('✓ Cliente atualizado');
+    if(nomeAntigo&&nomeAntigo!==nome){
+      docsAtualizados=atualizarNomeClienteEmDocumentos(id,nome);
+    }
+    toast(docsAtualizados?'✓ Cliente atualizado — nome atualizado em '+docsAtualizados+' documento(s) também':'✓ Cliente atualizado');
   } else {
     cliId=uid();
     DB.clientes.push({...obj,id:cliId,dt:hj()});
@@ -5167,9 +5202,22 @@ function verDoc(id,fromEntregas,fromCli){
   if(btnEditDesc)btnEditDesc.style.display=(isPed&&d.st!=='cancelado'&&!isMesclado)?'inline-flex':'none';
   openMD('ver');
 }
+function preencherValorSaldo(){
+  const id=docIdSelecionado;
+  const d=DB.pedidos.find(x=>x.id===id);if(!d)return;
+  const saldo=docSaldo(d);
+  if(saldo<=0){toast('✓ Pedido já está quitado','#10b981');return;}
+  document.getElementById('mpag-valor').value=saldo.toFixed(2);
+}
 function renderPagsModal(d){
   const lista=d.pagamentos||[];
   const pago=docPago(d);const saldo=docSaldo(d);
+  const btnSaldo=document.getElementById('mpag-btn-saldo');
+  if(btnSaldo){
+    btnSaldo.textContent=saldo>0?('💰 Usar saldo ('+fmt(saldo)+')'):'✓ Quitado';
+    btnSaldo.disabled=saldo<=0;
+    btnSaldo.style.opacity=saldo<=0?'0.5':'1';
+  }
   document.getElementById('mver-pag-lista').innerHTML=lista.length?
     lista.map((pg,i)=>`<div class="pag-row">
       <div><span style="color:var(--gn);font-weight:700">${fmt(pg.valor)}</span> <span style="color:var(--mt);font-size:11.5px">· ${pg.forma} · ${pg.dt}${pg.obs?' · '+pg.obs:''}</span></div>
@@ -7695,7 +7743,7 @@ function renderContasPagar(){
         b.pago&&b.obsPag
           ?'<div title="Observação do pagamento"><span style="color:#10b981;font-weight:600">💬 '+b.obsPag+'</span></div>'+(b.obs?'<div style="opacity:.7;margin-top:2px">'+b.obs+'</div>':'')
           :(b.obs||'')
-      }</td>
+      }${b.pagamentos&&b.pagamentos.length&&(b.pagamentos.length>1||!b.pago)?'<div style="margin-top:4px;padding-top:4px;border-top:1px dashed var(--br2)"><div style="font-weight:700;opacity:.8">Histórico de pagamentos:</div>'+b.pagamentos.map(p=>'• '+fmt(p.valor)+' em '+p.dt+(p.obs?' — '+p.obs:'')).join('<br>')+'</div>':''}</td>
       <td>${stHtml}</td>
       <td><div style="display:flex;gap:4px">
         ${!b.pago?`<button class="btn bp bsm" onclick="abrirPagBoleto('${b.id}')" style="font-size:11px">💳 Pagar</button>`:''}
@@ -7770,9 +7818,10 @@ function confirmarPagamentoLoteBoleto(){
   if(!dt){toast('⚠ Informe a data','#f59e0b');return;}
   if(!cpSelecionados.length){toast('⚠ Nenhum boleto selecionado','#f59e0b');return;}
   const idsPagar=[...cpSelecionados];
+  const dtBRLote=dt.split('-').reverse().join('/');
   DB.boletos=DB.boletos.map(function(b){
     if(!idsPagar.includes(b.id))return b;
-    return{...b,pago:true,dtPago:dt,valorPago:b.valor,obsPag:obs};
+    return{...b,pago:true,dtPago:dt,valorPago:b.valor,obsPag:obs,pagamentos:[...(b.pagamentos||[]),{valor:b.valor,dt:dtBRLote,dtISO:dt,obs}]};
   });
   // Salva cada registro individualmente no Firestore, mas faz UM ÚNICO markDirty+saveDB
   // no final — é isso que evita a espera de salvar boleto por boleto.
@@ -7867,25 +7916,44 @@ function abrirPagBoleto(id){
     '<div style="font-weight:700">'+b.forNome+'</div>'
     +'<div style="font-size:11px;color:var(--mt)">Boleto: '+(b.num||'--')+' · NF: '+(b.nf||'--')+'</div>'
     +'<div style="font-size:13px;font-weight:700;color:var(--or);margin-top:4px">Valor: '+fmt(b.valor)+'</div>'
-    +'<div style="font-size:11px;color:var(--mt)">Vencimento: '+b.venc.split('-').reverse().join('/')+'</div>';
+    +'<div style="font-size:11px;color:var(--mt)">Vencimento: '+b.venc.split('-').reverse().join('/')+'</div>'
+    +htmlHistoricoPagamentos(b.pagamentos);
   document.querySelectorAll('.md').forEach(m=>m.style.display='none');
   document.getElementById('md-boleto-pag').style.display='block';
   document.getElementById('mo').style.display='flex';
 }
+// Suporta pagamento parcial, no mesmo padrão já usado em Despesas: se o valor
+// pago for menor que o valor do boleto, esta linha é reduzida ao valor
+// efetivamente pago (e marcada como paga) e uma NOVA linha é criada com o
+// saldo restante em aberto — assim o boleto nunca fica marcado como "pago"
+// estando apenas parcialmente pago. Cada pagamento (total ou parcial) é
+// acumulado em b.pagamentos para exibir o histórico completo.
 function confirmarPagBoleto(){
   const id=document.getElementById('mbp-id').value;
+  const b=DB.boletos.find(x=>x.id===id);
+  if(!b)return;
   const dt=document.getElementById('mbp-dt').value;
-  const valor=parseFloat(document.getElementById('mbp-valor').value)||0;
-  const obs=document.getElementById('mbp-obs').value;
+  const valorPagar=Math.round((parseFloat(String(document.getElementById('mbp-valor').value).replace(',','.'))||0)*100)/100;
+  const obs=document.getElementById('mbp-obs').value.trim();
   if(!dt){toast('⚠ Informe a data','#f59e0b');return;}
-  if(!valor){toast('⚠ Informe o valor','#f59e0b');return;}
-  DB.boletos=DB.boletos.map(function(b){
-    if(b.id!==id)return b;
-    return{...b,pago:true,dtPago:dt,valorPago:valor,obsPag:obs};
+  if(!valorPagar||valorPagar<=0){toast('⚠ Valor inválido','#f59e0b');return;}
+  if(valorPagar>b.valor+0.01){toast('⚠ Valor maior que o boleto ('+fmt(b.valor)+')','#f59e0b');return;}
+  const restante=Math.round((b.valor-valorPagar)*100)/100;
+  const dtBR=dt.split('-').reverse().join('/');
+  const pagamentosChain=[...(b.pagamentos||[]),{valor:valorPagar,dt:dtBR,dtISO:dt,obs}];
+  DB.boletos=DB.boletos.map(function(x){
+    if(x.id!==id)return x;
+    return restante>0.01
+      ?{...x,valor:valorPagar,pago:true,dtPago:dt,valorPago:valorPagar,obsPag:obs,pagamentos:pagamentosChain}
+      :{...x,pago:true,dtPago:dt,valorPago:x.valor,obsPag:obs,pagamentos:pagamentosChain};
   });
-  const _bdp=DB.boletos.find(b=>b.id===id);if(_bdp)salvarRegistro('boletos',id,_bdp);
+  if(restante>0.01){
+    DB.boletos.push({...b,id:uid(),valor:restante,pago:false,dtPago:'',valorPago:0,obsPag:'',
+      obs:(b.obs?b.obs+' · ':'')+'Saldo restante de pagamento parcial',pagamentos:pagamentosChain,_saldoParcial:true});
+  }
+  const _bdp=DB.boletos.find(x=>x.id===id);if(_bdp)salvarRegistro('boletos',id,_bdp);
   markDirty('fin');saveDB();closeMD('boleto-pag');renderContasPagar();
-  toast('✓ Pagamento registrado!','#10b981');
+  toast(restante>0.01?'✓ Pagamento parcial registrado — saldo de '+fmt(restante)+' continua em aberto':'✓ Pagamento registrado!','#10b981');
 }
 function filtForBoleto(){
   const q=(document.getElementById('mb-for-src')?.value||'').toLowerCase().trim();
@@ -9404,12 +9472,19 @@ function finMostrarAba(aba){
 function abrirDespesa(tipo,id){
   syncAntesDe([],function(){_abrirDespesa(tipo,id);});
 }
+function popularCatsDespesaSelect(catAtual){
+  if(!DB.categoriasDespesas)DB.categoriasDespesas=[];
+  let cats=DB.categoriasDespesas.slice();
+  if(catAtual&&cats.indexOf(catAtual)===-1)cats.push(catAtual);
+  document.getElementById('md-desp-cat').innerHTML=cats.map(c=>`<option value="${c}">${c}</option>`).join('');
+}
 function _abrirDespesa(tipo,id){
   if(!DB.despesas)DB.despesas=[];
   document.getElementById('md-desp-id').value=id||'';
   document.getElementById('md-desp-tipo').value=tipo||'avulsa';
   document.getElementById('md-desp-titulo').textContent=(id?'Editar':'Nova')+' Despesa '+(tipo==='fixa'?'Fixa':'Avulsa');
   document.getElementById('md-desp-rec-wrap').style.display=tipo==='fixa'?'block':'none';
+  popularCatsDespesaSelect(id?(DB.despesas.find(function(x){return x.id===id;})||{}).cat:'');
   if(id){
     const d=DB.despesas.find(function(x){return x.id===id;});
     if(d){
@@ -9418,6 +9493,7 @@ function _abrirDespesa(tipo,id){
       document.getElementById('md-desp-valor').value=d.valor||'';
       document.getElementById('md-desp-venc').value=d.venc||'';
       document.getElementById('md-desp-dia').value=d.diaVenc||10;
+      document.getElementById('md-desp-parcelas').value=d.totalParcelas||12;
       document.getElementById('md-desp-obs').value=d.obs||'';
     }
   } else {
@@ -9426,6 +9502,7 @@ function _abrirDespesa(tipo,id){
     document.getElementById('md-desp-valor').value='';
     document.getElementById('md-desp-venc').value=dtHtml();
     document.getElementById('md-desp-dia').value=10;
+    document.getElementById('md-desp-parcelas').value=12;
     document.getElementById('md-desp-obs').value='';
   }
   document.querySelectorAll('.md').forEach(function(m){m.style.display='none';});
@@ -9458,11 +9535,15 @@ function salvarDespesa(){
     // geradas — usado para permitir cancelar de uma vez as parcelas futuras
     // ainda em aberto caso o gasto fixo seja interrompido.
     const serieId=tipo==='fixa'?uid():null;
-    DB.despesas.push({...obj,id:uid(),dt:hj(),serieId});
-    // Se for fixa, gera lançamentos para os próximos 12 meses
+    // Quantidade de parcelas definida pelo usuário (padrão 12, entre 1 e 120)
+    let numParcelas=tipo==='fixa'?(parseInt(document.getElementById('md-desp-parcelas').value)||12):1;
+    if(numParcelas<1)numParcelas=1;
+    if(numParcelas>120)numParcelas=120;
+    DB.despesas.push({...obj,id:uid(),dt:hj(),serieId,...(tipo==='fixa'?{parcelaNum:1,totalParcelas:numParcelas}:{})});
+    // Se for fixa, gera as parcelas futuras conforme a quantidade informada
     if(tipo==='fixa'){
-      gerarParcelasFixas({...obj,serieId});
-      toast('✓ Despesa fixa criada — lançamentos gerados','#10b981');
+      gerarParcelasFixas({...obj,serieId},numParcelas);
+      toast('✓ Despesa fixa criada — '+numParcelas+' parcela(s) gerada(s)','#10b981');
     } else {
       toast('✓ Despesa registrada');
     }
@@ -9472,14 +9553,16 @@ const _dd=DB.despesas.find(d=>d.id===(_did||''));
 if(_dd)salvarRegistro('despesas',_dd.id,_dd);
   markDirty('fin');saveDB();closeMD('despesa');renderDespesas();
 }
-function gerarParcelasFixas(d){
-  // Gera lançamentos mensais por 12 meses a partir do vencimento
+function gerarParcelasFixas(d,numParcelas){
+  // Gera lançamentos mensais a partir do vencimento, na quantidade informada
+  // pelo usuário (padrão 12, caso não informado — mantém o comportamento antigo).
+  if(!numParcelas||numParcelas<1)numParcelas=12;
   const base=new Date(d.venc+'T00:00:00');
-  for(let i=1;i<12;i++){
+  for(let i=1;i<numParcelas;i++){
     const dt=new Date(base);
     dt.setMonth(dt.getMonth()+i);
     const dtStr=dt.toISOString().slice(0,10);
-    DB.despesas.push({...d,id:uid(),venc:dtStr,dt:hj(),pago:false,dtPago:'',valorPago:0,_gerado:true});
+    DB.despesas.push({...d,id:uid(),venc:dtStr,dt:hj(),pago:false,dtPago:'',valorPago:0,_gerado:true,parcelaNum:i+1,totalParcelas:numParcelas});
   }
 }
 // Paga uma despesa — suporta pagamento parcial: se o valor informado for
@@ -9489,6 +9572,19 @@ function gerarParcelasFixas(d){
 // Relatório) a regra simples de que "pago:true" sempre significa que o
 // campo "valor" inteiro daquela linha foi pago — nenhum outro cálculo
 // financeiro precisa saber sobre pagamento parcial.
+// Monta o HTML do histórico de pagamentos já feitos (chain carregada através
+// das divisões de pagamento parcial) — usado nos modais de pagamento de
+// despesa e boleto. Retorna '' quando não há histórico anterior (0 ou 1
+// pagamento ainda não fechado não precisa mostrar nada extra).
+function htmlHistoricoPagamentos(lista){
+  if(!lista||!lista.length)return'';
+  return '<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--br2)">'
+    +'<div style="font-size:11px;font-weight:700;color:var(--mt);margin-bottom:4px">Pagamentos anteriores:</div>'
+    +lista.map(function(p){
+      return '<div style="font-size:11px;color:var(--mt)">• '+fmt(p.valor)+' em '+p.dt+(p.obs?' — '+p.obs:'')+'</div>';
+    }).join('')
+    +'</div>';
+}
 function abrirPagDespesa(id){
   const d=DB.despesas.find(x=>x.id===id);
   if(!d)return;
@@ -9499,7 +9595,8 @@ function abrirPagDespesa(id){
   document.getElementById('mdp-info').innerHTML=
     '<div style="font-weight:700">'+d.desc+'</div>'
     +'<div style="font-size:11px;color:var(--mt)">'+(d.cat||'Outros')+(d.venc?' · Vencimento: '+d.venc.split('-').reverse().join('/'):'')+'</div>'
-    +'<div style="font-size:13px;font-weight:700;color:var(--or);margin-top:4px">Valor: '+fmt(d.valor)+'</div>';
+    +'<div style="font-size:13px;font-weight:700;color:var(--or);margin-top:4px">Valor: '+fmt(d.valor)+'</div>'
+    +htmlHistoricoPagamentos(d.pagamentos);
   document.querySelectorAll('.md').forEach(m=>m.style.display='none');
   document.getElementById('md-desp-pag').style.display='block';
   document.getElementById('mo').style.display='flex';
@@ -9515,15 +9612,19 @@ function confirmarPagDespesa(){
   if(!valorPagar||valorPagar<=0){toast('⚠ Valor inválido','#f59e0b');return;}
   if(valorPagar>d.valor+0.01){toast('⚠ Valor maior que a despesa ('+fmt(d.valor)+')','#f59e0b');return;}
   const restante=Math.round((d.valor-valorPagar)*100)/100;
+  const dtBR=dt.split('-').reverse().join('/');
+  // Histórico de pagamentos — acumula cada pagamento parcial feito desde a
+  // criação da despesa, mesmo atravessando as divisões de saldo restante.
+  const pagamentosChain=[...(d.pagamentos||[]),{valor:valorPagar,dt:dtBR,dtISO:dt,obs}];
   DB.despesas=DB.despesas.map(function(x){
     if(x.id!==id)return x;
     return restante>0.01
-      ?{...x,valor:valorPagar,pago:true,dtPago:dt,valorPago:valorPagar,obsPag:obs}
-      :{...x,pago:true,dtPago:dt,valorPago:x.valor,obsPag:obs};
+      ?{...x,valor:valorPagar,pago:true,dtPago:dt,valorPago:valorPagar,obsPag:obs,pagamentos:pagamentosChain}
+      :{...x,pago:true,dtPago:dt,valorPago:x.valor,obsPag:obs,pagamentos:pagamentosChain};
   });
   if(restante>0.01){
     DB.despesas.push({...d,id:uid(),valor:restante,pago:false,dtPago:'',valorPago:0,obsPag:'',
-      obs:(d.obs?d.obs+' · ':'')+'Saldo restante de pagamento parcial',dt:hj(),_saldoParcial:true});
+      obs:(d.obs?d.obs+' · ':'')+'Saldo restante de pagamento parcial',dt:hj(),pagamentos:pagamentosChain,_saldoParcial:true});
   }
   const _ddp=DB.despesas.find(d=>d.id===id);if(_ddp)salvarRegistro('despesas',id,_ddp);
   markDirty('fin');saveDB();closeMD('desp-pag');renderDespesas();
@@ -9605,8 +9706,9 @@ function confirmarPagDespesaLote(){
   if(!alvo.length){toast('Nenhuma despesa em aberto selecionada','#f59e0b');return;}
   const total=alvo.reduce((s,d)=>s+d.valor,0);
   const idsAlvo=new Set(alvo.map(d=>d.id));
+  const dtBRLote=dt.split('-').reverse().join('/');
   DB.despesas=DB.despesas.map(function(d){
-    return idsAlvo.has(d.id)?{...d,pago:true,dtPago:dt,valorPago:d.valor,obsPag:obs}:d;
+    return idsAlvo.has(d.id)?{...d,pago:true,dtPago:dt,valorPago:d.valor,obsPag:obs,pagamentos:[...(d.pagamentos||[]),{valor:d.valor,dt:dtBRLote,dtISO:dt,obs}]}:d;
   });
   idsAlvo.forEach(function(id){
     const d=DB.despesas.find(x=>x.id===id);
@@ -9667,20 +9769,21 @@ function renderDespesas(){
     return(a.venc||'').localeCompare(b.venc||''); // vencidas/abertas: vencimento mais próximo primeiro
   });
 
-  // KPIs (sempre sobre o total, não sobre o filtro — visão geral da situação)
-  const totalMes=DB.despesas.filter(function(d){
+  // KPIs (sempre sobre o total, não sobre o filtro — visão geral da situação;
+  // usa 'base' (=semExcluidos(DB.despesas)) para não contar despesas excluídas)
+  const totalMes=base.filter(function(d){
     const m=d.venc?d.venc.slice(0,7):'';
     return m===hj().slice(0,7);
   }).reduce(function(s,d){return s+d.valor;},0);
-  const totalPago=DB.despesas.filter(function(d){return d.pago;}).reduce(function(s,d){return s+d.valor;},0);
-  const totalAberto=DB.despesas.filter(function(d){return!d.pago;}).reduce(function(s,d){return s+d.valor;},0);
-  const vencidas=DB.despesas.filter(function(d){return!d.pago&&d.venc&&d.venc<hj();});
+  const totalPago=base.filter(function(d){return d.pago;}).reduce(function(s,d){return s+d.valor;},0);
+  const totalAberto=base.filter(function(d){return!d.pago;}).reduce(function(s,d){return s+d.valor;},0);
+  const vencidas=base.filter(function(d){return!d.pago&&d.venc&&d.venc<hj();});
   const kpisEl=document.getElementById('desp-kpis');
   if(kpisEl)kpisEl.innerHTML=[
     {l:'Total do Mês',v:fmt(totalMes),c:'#f97316',s:'despesas do mês atual'},
-    {l:'Total em Aberto',v:fmt(totalAberto),c:'#3b82f6',s:DB.despesas.filter(d=>!d.pago).length+' despesa(s)'},
+    {l:'Total em Aberto',v:fmt(totalAberto),c:'#3b82f6',s:base.filter(d=>!d.pago).length+' despesa(s)'},
     {l:'Vencidas',v:fmt(vencidas.reduce(function(s,d){return s+d.valor;},0)),c:'#ef4444',s:vencidas.length+' despesa(s)'},
-    {l:'Total Pago',v:fmt(totalPago),c:'#10b981',s:DB.despesas.filter(d=>d.pago).length+' despesa(s)'},
+    {l:'Total Pago',v:fmt(totalPago),c:'#10b981',s:base.filter(d=>d.pago).length+' despesa(s)'},
   ].map(function(k){return'<div class="kpi"><div class="kv" style="color:'+k.c+'">'+k.v+'</div><div class="kl">'+k.l+'</div><div class="ks">'+k.s+'</div></div>';}).join('');
 
   // Totais por categoria — respeita os filtros atuais (mostra o que está sendo visto na lista)
@@ -9705,12 +9808,13 @@ function renderDespesas(){
     const vencDt=d.venc?new Date(d.venc+'T00:00:00'):null;
     const vencido=!d.pago&&vencDt&&vencDt<hoje;
     const corBorda=d.pago?'#10b981':vencido?'#ef4444':'#3b82f6';
-    const stHtml=d.pago
+    const stHtml=(d.pago
       ?'<span style="background:#10b98120;color:#10b981;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:700">✓ Pago</span>'
       +(d.dtPago?'<div style="font-size:10px;color:var(--mt);margin-top:3px">em '+d.dtPago.split('-').reverse().join('/')+'</div>':'')
       +(d.obsPag?'<div title="Observação do pagamento" style="font-size:10px;color:#10b981;margin-top:1px">💬 '+d.obsPag+'</div>':'')
       :vencido?'<span style="background:#ef444420;color:#ef4444;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:700">⚠ Vencida</span>'
-      :'<span style="background:#3b82f620;color:#3b82f6;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:700">Em Aberto</span>';
+      :'<span style="background:#3b82f620;color:#3b82f6;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:700">Em Aberto</span>')
+      +(d.pagamentos&&d.pagamentos.length&&(d.pagamentos.length>1||!d.pago)?'<div style="margin-top:3px;font-size:10px;color:var(--mt)"><div style="font-weight:700;opacity:.8">Histórico de pagamentos:</div>'+d.pagamentos.map(p=>'• '+fmt(p.valor)+' em '+p.dt+(p.obs?' — '+p.obs:'')).join('<br>')+'</div>':'');
     const parcialTag=d._saldoParcial?'<span title="Saldo restante de pagamento parcial" style="font-size:10px;color:#f59e0b;margin-left:5px">(parcial)</span>':'';
     const temIrmasAbertas=d.tipo==='fixa'&&d.serieId&&base.some(x=>x.serieId===d.serieId&&x.id!==d.id&&!x.pago);
     return'<tr style="border-left:3px solid '+corBorda+'">'
@@ -9721,7 +9825,7 @@ function renderDespesas(){
       +'<td style="font-weight:700">'+fmt(d.valor)+'</td>'
       +'<td style="color:var(--mt)">'+(d.venc?d.venc.split('-').reverse().join('/'):'--')+'</td>'
       +'<td>'+stHtml+'</td>'
-      +'<td style="font-size:11px;color:var(--mt)">'+(d.tipo==='fixa'?'Todo mês dia '+d.diaVenc:'--')+'</td>'
+      +'<td style="font-size:11px;color:var(--mt)">'+(d.tipo==='fixa'?'Todo mês dia '+d.diaVenc+(d.totalParcelas?' · Parcela '+(d.parcelaNum||1)+'/'+d.totalParcelas:''):'--')+'</td>'
       +'<td><div style="display:flex;gap:4px;flex-wrap:wrap">'
       +(!d.pago?'<button class="btn bp bsm" onclick="abrirPagDespesa(\''+d.id+'\')" style="font-size:11px">✓ Pagar</button>':'')
       +'<button class="btn bg bsm" onclick="abrirDespesa(\''+d.tipo+'\',\''+d.id+'\')">✎</button>'
@@ -9742,8 +9846,8 @@ function renderRelDespesas(){
   const fim=document.getElementById('rel-desp-fim')?.value||'';
   if(!DB.despesas)DB.despesas=[];
 
-  // Filtra despesas pagas no período
-  const despFil=DB.despesas.filter(function(d){
+  // Filtra despesas pagas no período (semExcluidos evita contar despesas apagadas)
+  const despFil=semExcluidos(DB.despesas).filter(function(d){
     if(!d.pago&&!d.valor)return false;
     const dt=d.dtPago||d.venc||'';
     if(ini&&dt<ini)return false;
@@ -10051,8 +10155,8 @@ function renderRelCaixa(){
     pagamentos.push({dt:b.dtPago.split('-').reverse().join('/'),dtISO:b.dtPago,
       desc:b.forNome+(b.nf?' (NF '+b.nf+')':''),tipo:'Boleto',cat:'Fornecedor',valor:b.valor});
   });
-  // Despesas pagas
-  (DB.despesas||[]).filter(function(d){
+  // Despesas pagas (semExcluidos evita contar despesas apagadas)
+  semExcluidos(DB.despesas||[]).filter(function(d){
     if(!d.pago||!d.dtPago)return false;
     if(ini&&d.dtPago<ini)return false;
     if(fim&&d.dtPago>fim)return false;
@@ -10197,8 +10301,8 @@ function renderDRE(){
     return true;
   }).reduce(function(s,b){return s+b.valor;},0);
 
-  // ── DESPESAS PAGAS NO PERÍODO ──
-  var despFil=(DB.despesas||[]).filter(function(d){
+  // ── DESPESAS PAGAS NO PERÍODO ── (semExcluidos evita contar despesas apagadas)
+  var despFil=semExcluidos(DB.despesas||[]).filter(function(d){
     var dt=d.dtPago||'';
     if(!dt)return false; // só pagas
     if(ini&&dt<ini)return false;
@@ -12434,6 +12538,12 @@ function renderConfig(){
       <span style="flex:1;font-size:12.5px">${c}</span>
       <button class="btn bd bsm" onclick="delCat(${i})">✕</button>
     </div>`).join('');
+  if(!DB.categoriasDespesas)DB.categoriasDespesas=[];
+  document.getElementById('cfg-cats-desp').innerHTML=DB.categoriasDespesas.map((c,i)=>`
+    <div style="display:flex;align-items:center;gap:7px;margin-bottom:5px">
+      <span style="flex:1;font-size:12.5px">${c}</span>
+      <button class="btn bd bsm" onclick="delCatDespesa(${i})">✕</button>
+    </div>`).join('');
   // Logo
   const logo=c.logo||'';
   const img=document.getElementById('cfg-logo-img');
@@ -12505,6 +12615,26 @@ function salvarConfig(){
 }
 function addCat(){const v=document.getElementById('cfg-cat-new').value.trim();if(!v)return;DB.categorias.push(v);document.getElementById('cfg-cat-new').value='';saveDB();renderConfig();toast('✓ Categoria adicionada');}
 function delCat(i){if(!confirm('Remover categoria?'))return;DB.categorias.splice(i,1);saveDB();renderConfig();toast('Removida','#ef4444');}
+function addCatDespesa(){
+  const v=document.getElementById('cfg-cat-desp-new').value.trim();
+  if(!v)return;
+  if(!DB.categoriasDespesas)DB.categoriasDespesas=[];
+  if(DB.categoriasDespesas.some(c=>c.toLowerCase()===v.toLowerCase())){toast('⚠ Categoria já existe','#f59e0b');return;}
+  DB.categoriasDespesas.push(v);
+  document.getElementById('cfg-cat-desp-new').value='';
+  saveDB();renderConfig();toast('✓ Categoria adicionada');
+}
+function delCatDespesa(i){
+  const cat=DB.categoriasDespesas[i];
+  if(cat===undefined)return;
+  const emUso=semExcluidos(DB.despesas||[]).filter(d=>d.cat===cat).length;
+  const msg=emUso>0
+    ?'⚠ '+emUso+' despesa(s) usam a categoria "'+cat+'". Elas continuarão com esse nome, mas a categoria sairá da lista. Remover mesmo assim?'
+    :'Remover categoria "'+cat+'"?';
+  if(!confirm(msg))return;
+  DB.categoriasDespesas.splice(i,1);
+  saveDB();renderConfig();toast('Removida','#ef4444');
+}
 
 // ═══════════════════════════════════════════════════════
 // BACKUP
@@ -12589,6 +12719,7 @@ function exportBK(label){
       entradas:DB.entradas||[],
       devolucoes:DB.devolucoes||[],
       categorias:DB.categorias||[],
+      categoriasDespesas:DB.categoriasDespesas||[],
       familias:DB.familias||[],
       boletos:DB.boletos||[],
       despesas:DB.despesas||[],
@@ -12633,6 +12764,7 @@ function procImp(file){
         d.entradas?d.entradas.length+' entradas':'',
         d.devolucoes?d.devolucoes.length+' devoluções':'',
         d.categorias?d.categorias.length+' categorias':'',
+        d.categoriasDespesas?d.categoriasDespesas.length+' categorias de despesas':'',
         d.familias?d.familias.length+' famílias':'',
         d.config?'configurações':'',
       ].filter(Boolean).join(' · ');
@@ -12656,6 +12788,7 @@ function confirImp(){
   ['clientes','produtos','pedidos','fornecedores','entradas','devolucoes'].forEach(k=>{if(impPending[k])DB[k]=impPending[k];});
   if(impPending.seq)DB.seq={...{ped:1,orc:1,ent:1,dev:1},...impPending.seq};
   if(impPending.categorias&&impPending.categorias.length)DB.categorias=impPending.categorias;
+  if(impPending.categoriasDespesas&&impPending.categoriasDespesas.length)DB.categoriasDespesas=impPending.categoriasDespesas;
   if(impPending.familias)DB.familias=impPending.familias;
   if(impPending.boletos)DB.boletos=impPending.boletos;
   if(impPending.despesas)DB.despesas=impPending.despesas;
@@ -12686,6 +12819,7 @@ function apagarTodos(){
   DB={clientes:[],produtos:[],pedidos:[],fornecedores:[],entradas:[],devolucoes:[],
     boletos:[],despesas:[],parceiros:[],campanhas:[],tarefas:[],familias:[],xmlMemoria:{},
     categorias:['Cimento','Alvenaria','Agregados','Aço','Tintas','Cobertura','Elétrico','Hidráulico','Ferramentas','Outros'],
+    categoriasDespesas:['Aluguel','Energia','Água','Internet','Telefone','Funcionários','Fornecedor','Manutenção','Impostos','Outros'],
     config:DB.config,seq:{ped:1,orc:1,ent:1,dev:1}};
   saveDB();renderBackup();toast('🗑 Dados apagados','#ef4444');
 }
@@ -13691,7 +13825,7 @@ function forcarUpload(){
       return{fields:fields};
     }
     // Monta todos os documentos
-    var meta={ts:ts,config:JSON.stringify(DB.config||{}),seq:JSON.stringify(DB.seq||{}),categorias:JSON.stringify(DB.categorias||[]),familias:JSON.stringify(DB.familias||[]),campanhas:JSON.stringify(DB.campanhas||[])};
+    var meta={ts:ts,config:JSON.stringify(DB.config||{}),seq:JSON.stringify(DB.seq||{}),categorias:JSON.stringify(DB.categorias||[]),categoriasDespesas:JSON.stringify(DB.categoriasDespesas||[]),familias:JSON.stringify(DB.familias||[]),campanhas:JSON.stringify(DB.campanhas||[])};
     var docs=[
       {path:'meta_clientes',data:{clientes:JSON.stringify(DB.clientes||[]),ts:ts}},
       {path:'meta_fin',data:{boletos:JSON.stringify(DB.boletos||[]),despesas:JSON.stringify(DB.despesas||[]),ts:ts}},
@@ -13774,7 +13908,7 @@ function forcarUpload(){
       if(idx>=docs.length){
         // Meta por último
         showSI('pending');
-        fetch(baseUrl+'/meta?updateMask.fieldPaths=ts&updateMask.fieldPaths=config&updateMask.fieldPaths=seq&updateMask.fieldPaths=categorias&updateMask.fieldPaths=familias&updateMask.fieldPaths=campanhas',{
+        fetch(baseUrl+'/meta?updateMask.fieldPaths=ts&updateMask.fieldPaths=config&updateMask.fieldPaths=seq&updateMask.fieldPaths=categorias&updateMask.fieldPaths=categoriasDespesas&updateMask.fieldPaths=familias&updateMask.fieldPaths=campanhas',{
           method:'PATCH',
           headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json'},
           body:JSON.stringify(toFsDoc(meta))
@@ -13854,6 +13988,7 @@ function sincronizarNuvem(){
         config:      JSON.parse(m.config||'{}'),
         seq:         JSON.parse(m.seq||'{}'),
         categorias:  JSON.parse(m.categorias||'[]'),
+        categoriasDespesas: JSON.parse(m.categoriasDespesas||'[]'),
         familias:    JSON.parse(m.familias||'[]'),
         campanhas:   JSON.parse(m.campanhas||'[]'),
         clientes:    mc&&mc.exists?JSON.parse(mc.data().clientes||'[]'):JSON.parse(m.clientes||'[]'),
@@ -13874,6 +14009,7 @@ function sincronizarNuvem(){
         })(),
         pedidos:     allPeds,
       };
+      if(!DB.categoriasDespesas||!DB.categoriasDespesas.length)DB.categoriasDespesas=['Aluguel','Energia','Água','Internet','Telefone','Funcionários','Fornecedor','Manutenção','Impostos','Outros'];
       salvarCacheLocalSeguro();
       go(curPg||'dashboard');
       cmxLog('SYNC','Sincronização manual concluída',''+allPeds.length+' pedidos');
@@ -14235,6 +14371,7 @@ window.auth.onAuthStateChanged(function(user){
             config:      JSON.parse(m.config||'{}'),
             seq:         JSON.parse(m.seq||'{}'),
             categorias:  JSON.parse(m.categorias||'[]'),
+            categoriasDespesas: JSON.parse(m.categoriasDespesas||'[]'),
             familias:    JSON.parse(m.familias||'[]'),
             campanhas:   JSON.parse(m.campanhas||'[]'),
             xmlMemoria:  metaOp&&metaOp.exists?JSON.parse(metaOp.data().xmlMemoria||'{}'):JSON.parse(m.xmlMemoria||'{}'),
@@ -14249,6 +14386,7 @@ window.auth.onAuthStateChanged(function(user){
             produtos:    fbProds,
             pedidos:     fbPeds,
           };
+          if(!DB.categoriasDespesas||!DB.categoriasDespesas.length)DB.categoriasDespesas=['Aluguel','Energia','Água','Internet','Telefone','Funcionários','Fornecedor','Manutenção','Impostos','Outros'];
           // Proteção: mescla com localStorage se local tiver MAIS registros em alguma coleção
           // Isso protege contra uploads parciais (meta.ts atualizado mas meta_clientes falhou)
           if(localDB){
