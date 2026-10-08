@@ -8334,14 +8334,14 @@ function mostrarPreviewXML(d){
     const nomeMostra=it.status==='encontrado'?(prodCad?.nome||it.xProd):it.xProd;
 
     html+='<tr style="border-top:2px solid '+rowBorder+';background:'+rowBg+'">'
-      +'<td style="padding:7px 10px">'
+      +'<td id="xml-prec-nome-'+i+'" style="padding:7px 10px">'
       +'<div style="font-weight:600;font-size:11px">'+nomeMostra+'</div>'
       +(it.status==='encontrado'
         ?'<div style="font-size:10px;color:#10b981">✓ Associado</div>'
         :'<div style="font-size:10px;color:#f59e0b">⚠ Novo produto</div>')
       +'</td>'
       // Último custo (somente leitura)
-      +'<td style="padding:7px 10px;text-align:right;font-size:11px;color:var(--mt)">'
+      +'<td id="xml-prec-ult-'+i+'" style="padding:7px 10px;text-align:right;font-size:11px;color:var(--mt)">'
       +(ultCusto>0?fmt(ultCusto):'<span style="color:var(--mt)">--</span>')
       +'</td>'
       // Custo NF (editável)
@@ -8615,17 +8615,43 @@ function xmlSelecionarProd(idx,prod,flag){
     _xmlDados.itens[idx].status='novo';
     _xmlDados.itens[idx].pid=null;
     _xmlDados.itens[idx].nomeCad=null;
+    _xmlDados.itens[idx].escolheuNovo=true; // escolha explícita de criar produto novo
+    _xmlDados.itens[idx].fromMem=false;
     xmlAtualizarCelula(idx);
+    xmlAtualizarPrecInfo(idx);
     setTimeout(function(){xmlVerificarCompleto(idx);xmlSalvarRascunho('ass');},50);
   } else {
     _xmlDados.itens[idx].status='encontrado';
     _xmlDados.itens[idx].pid=prod.id;
     _xmlDados.itens[idx].nomeCad=prod.nome;
+    _xmlDados.itens[idx].escolheuNovo=false;
+    _xmlDados.itens[idx].fromMem=false;
     // Sempre preenche preço de venda com o atual do produto cadastrado
     const pvEl=document.getElementById('xml-pvenda-'+idx);
     if(pvEl)pvEl.value=prod.preco.toFixed(2);
     xmlAtualizarCelula(idx);
+    xmlAtualizarPrecInfo(idx);
     setTimeout(function(){xmlVerificarCompleto(idx);xmlSalvarRascunho('ass');},50);
+  }
+}
+// Atualiza, na aba Precificação, o nome do produto e o "Últ. Custo" quando a
+// associação muda (a aba é montada uma única vez; sem isto ela continuaria
+// mostrando o produto antigo depois de um "trocar").
+function xmlAtualizarPrecInfo(idx){
+  if(!_xmlDados||!_xmlDados.itens[idx])return;
+  const it=_xmlDados.itens[idx];
+  const prodCad=it.status==='encontrado'?DB.produtos.find(function(p){return p.id===it.pid;}):null;
+  const nomeEl=document.getElementById('xml-prec-nome-'+idx);
+  if(nomeEl){
+    nomeEl.innerHTML='<div style="font-weight:600;font-size:11px">'+(prodCad?prodCad.nome:it.xProd)+'</div>'
+      +(it.status==='encontrado'
+        ?'<div style="font-size:10px;color:#10b981">✓ Associado</div>'
+        :'<div style="font-size:10px;color:#f59e0b">⚠ Novo produto</div>');
+  }
+  const ultEl=document.getElementById('xml-prec-ult-'+idx);
+  if(ultEl){
+    const ult=prodCad?(prodCad.custo||0):0;
+    ultEl.innerHTML=ult>0?fmt(ult):'<span style="color:var(--mt)">--</span>';
   }
 }
 function xmlAtualizarCelula(idx){
@@ -8638,7 +8664,7 @@ function xmlAtualizarCelula(idx){
       +'<button onmousedown="xmlLimparVinculo('+idx+')" style="font-size:10px;color:var(--mt);background:none;border:none;cursor:pointer;padding:0">trocar</button>';
     const extraRow=document.getElementById('xml-extra-'+idx);
     if(extraRow)extraRow.style.display='none';
-  } else if(it.status==='novo'){
+  } else if(it.status==='novo'&&it.escolheuNovo){
     celula.innerHTML='<div style="font-size:11px;color:#f59e0b;font-weight:700">➕ Novo produto</div>'
       +'<button onmousedown="xmlLimparVinculo('+idx+')" style="font-size:10px;color:var(--mt);background:none;border:none;cursor:pointer;padding:0">trocar</button>';
     const extraRow=document.getElementById('xml-extra-'+idx);
@@ -8677,7 +8703,13 @@ function xmlLimparVinculo(idx){
   _xmlDados.itens[idx].status='novo';
   _xmlDados.itens[idx].pid=null;
   _xmlDados.itens[idx].nomeCad=null;
+  // Volta ao estado "buscar produto" (campo de busca) — não ao rótulo
+  // "Novo produto" — para permitir escolher outro produto já cadastrado.
+  _xmlDados.itens[idx].escolheuNovo=false;
+  _xmlDados.itens[idx].fromMem=false;
   xmlAtualizarCelula(idx);
+  xmlAtualizarPrecInfo(idx);
+  setTimeout(function(){xmlVerificarCompleto(idx);xmlSalvarRascunho('ass');},50);
 }
 function xmlVincularProd(idx,val){
   if(!_xmlDados)return;
