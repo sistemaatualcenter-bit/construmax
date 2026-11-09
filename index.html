@@ -2606,6 +2606,7 @@ function salvarCacheLocalSeguro(){
     var corteAbertoISO=corteAberto.toISOString().slice(0,10);
     return semExcluidosCache(lista).filter(function(p){
       var dt=String(p.dtISO||p.dt||'').slice(0,10);if(dt.indexOf('/')>=0)dt=dt.split('/').reverse().join('-');
+      if(p._modTs&&(Date.now()-p._modTs)<3*86400000)return true; // alterado há pouco: nunca fica fora do cache
       var fechado=['pago','cancelado','mesclado-pago','convertido'].includes(p.st);
       return fechado?dt>=corteFechadoISO:dt>=corteAbertoISO;
     });
@@ -3143,7 +3144,11 @@ function mergePedidosSeguro(fbArr,localArr){
     var local=map[r.id];
     if(!local){map[r.id]=r;return;}
     var pagamentosUnidos=unirPagamentosSeguro(local.pagamentos,r.pagamentos);
-    if(STATUS_TERMINAIS.indexOf(local.st)!==-1&&local.st!==r.st){
+    var tsL=local._modTs||0,tsR=r._modTs||0;
+    if(tsL!==tsR&&local.st!==r.st){
+      // Há carimbo de alteração de status: vale a versão alterada por último
+      map[r.id]=Object.assign({},tsL>tsR?local:r,{pagamentos:pagamentosUnidos});
+    }else if(STATUS_TERMINAIS.indexOf(local.st)!==-1&&local.st!==r.st){
       map[r.id]=Object.assign({},local,{pagamentos:pagamentosUnidos});
     }else{
       map[r.id]=Object.assign({},r,{pagamentos:pagamentosUnidos});
@@ -3415,6 +3420,11 @@ function baixarEstoque(doc){
 }
 function restaurarEstoque(doc){
   if(!doc||doc.tipo==='orc')return;
+  // Proteção contra dupla devolução: se o estoque deste pedido já foi devolvido
+  // (flag explicitamente false), não devolve de novo. Pedidos antigos sem flag
+  // são tratados como "estoque baixado".
+  if(doc._estoqueJaBaixado===false)return;
+  doc._estoqueJaBaixado=false;
   doc.itens.forEach(it=>{DB.produtos=DB.produtos.map(p=>p.id===it.pid?{...p,est:p.est+it.qtd}:p);});
 }
 
@@ -5280,8 +5290,9 @@ function mudaStatus(id,st){
   markDirty('pedidos');saveDB();renderOrcamentos();return;}
   let estoqueMudou=false;
   if(st==='cancelado'&&old!=='cancelado'){restaurarEstoque(d);estoqueMudou=true;}
-  if(old==='cancelado'&&st!=='cancelado'){baixarEstoque(d);estoqueMudou=true;}
+  if(old==='cancelado'&&st!=='cancelado'){d._estoqueJaBaixado=false;baixarEstoque(d);estoqueMudou=true;}
   d.st=st;
+  d._modTs=Date.now(); // carimbo da última alteração de status (usado para resolver conflitos de sincronização)
   // Se marcou como entregue via entrega, registra data
   if(st==='entregue'&&d.entrega){
     d.entrega.st='entregue';
@@ -10990,11 +11001,12 @@ function relLimpar(){
   ['rel-ini','rel-fim','rel-cat'].forEach(id=>{const e=document.getElementById(id);if(e)e.value='';});
   renderRelatorios();
 }
-function calcRecorrencia(cliId){
+function calcRecorrencia(cliId,pedsPre){
   const hoje=new Date();hoje.setHours(0,0,0,0);
   const cfm=catFilModo||'com';
-  const peds=DB.pedidos.filter(d=>d.tipo==='ped'&&isAtivoFat(d)&&d.cliId===cliId&&d.cliId!=='cli-anonimo')
-    .sort((a,b)=>(a.dtISO||a.dt).localeCompare(b.dtISO||b.dt));
+  // pedsPre (opcional): pedidos do cliente já separados numa única passada (evita varrer todos os pedidos para cada cliente)
+  const peds=(pedsPre||DB.pedidos.filter(d=>d.tipo==='ped'&&isAtivoFat(d)&&d.cliId===cliId&&d.cliId!=='cli-anonimo'))
+    .slice().sort((a,b)=>(a.dtISO||a.dt).localeCompare(b.dtISO||b.dt));
   if(!peds.length)return null;
   const total=peds.reduce((s,d)=>s+docTotalFil(d,cfm),0);
   const numPeds=peds.length;
@@ -11023,7 +11035,12 @@ function calcRecorrencia(cliId){
 function renderRecorrencia(){
   const fil=document.getElementById('rel-rec-fil')?.value||'';
   const clientes=DB.clientes.filter(c=>!c.anonimo);
-  const dados=clientes.map(c=>({c,rec:calcRecorrencia(c.id)})).filter(x=>x.rec);
+  // Agrupa os pedidos por cliente UMA vez (antes: cada cliente varria todos os pedidos)
+  const porCli={};
+  DB.pedidos.forEach(function(d){
+    if(d.tipo==='ped'&&d.cliId&&d.cliId!=='cli-anonimo'&&isAtivoFat(d)){(porCli[d.cliId]||(porCli[d.cliId]=[])).push(d);}
+  });
+  const dados=clientes.map(c=>({c,rec:porCli[c.id]?calcRecorrencia(c.id,porCli[c.id]):null})).filter(x=>x.rec);
   // Aplica filtro de situação
   const lista=dados.filter(x=>!fil||
     (fil==='ativo'&&x.rec.sit==='Ativo')||
@@ -11044,7 +11061,13 @@ function renderRecorrencia(){
   ].map(k=>`<div class="kpi"><div class="kv" style="color:${k.c};font-size:20px">${k.v}</div><div class="kl">${k.l}</div><div class="ks">${k.s}</div></div>`).join('');
   const tbody=document.getElementById('rel-rec-tbody');
   if(!tbody)return;
-  tbody.innerHTML=lista.length?lista.map(({c,rec})=>`
+  // Só desenha as primeiras linhas (a tela ficava pesada com centenas de clientes abertos de uma vez)
+  if(!window._recMostrarTodos||window._recFilAnt!==fil){window._recMostrarTodos=false;}
+  window._recFilAnt=fil;
+  const LIM=30;
+  const listaTodos=lista;
+  const listaVis=window._recMostrarTodos?lista:lista.slice(0,LIM);
+  tbody.innerHTML=listaVis.length?listaVis.map(({c,rec})=>`
     <tr>
       <td style="font-weight:600;cursor:pointer" onclick="go('clientes');setTimeout(()=>abrirFicha('${c.id}'),100)">${c.nome}</td>
       <td style="text-align:center;font-weight:700">${rec.numPeds}</td>
@@ -11054,7 +11077,7 @@ function renderRecorrencia(){
       </td>
       <td style="color:var(--mt);text-align:center">${rec.mediaDias!==null?rec.mediaDias+'d':'--'}</td>
       <td><span style="background:${rec.sitBg};color:${rec.sitC};padding:3px 9px;border-radius:6px;font-size:11px;font-weight:700">${rec.sit}</span></td>
-    </tr>`).join(''):`<tr><td colspan="6" class="es">Nenhum cliente${fil?' com esse filtro':''}</td></tr>`;
+    </tr>`).join('')+(listaTodos.length>LIM?`<tr><td colspan="6" style="text-align:center;padding:10px"><button class="btn bg bsm" onclick="window._recMostrarTodos=${window._recMostrarTodos?'false':'true'};renderRecorrencia()">${window._recMostrarTodos?'▲ Mostrar só os '+LIM+' primeiros':'▼ Ver todos os '+listaTodos.length+' clientes'}</button></td></tr>`:''):`<tr><td colspan="6" class="es">Nenhum cliente${fil?' com esse filtro':''}</td></tr>`;
 }
 function sincFiltrosGro(){
   // Sincroniza os dois blocos de filtro (rel-gro-* e rel-gross-*)
@@ -14471,6 +14494,9 @@ window.auth.onAuthStateChanged(function(user){
         const idsLocais={};
         (DB.pedidos||[]).forEach(function(p){if(p.id)idsLocais[p.id]=true;});
         fbPeds.forEach(function(p){if(p.id&&!idsLocais[p.id]){DB.pedidos.push(p);idsLocais[p.id]=true;}});
+        // Pedido existente nos dois lados: se a nuvem tem alteração de status mais nova, ela vale
+        var _fbPorId={};fbPeds.forEach(function(p){if(p&&p.id)_fbPorId[p.id]=p;});
+        DB.pedidos=DB.pedidos.map(function(l){var f=_fbPorId[l.id];return(f&&(f._modTs||0)>(l._modTs||0)&&f.st!==l.st)?f:l;});
         cmxLog('SYNC','Local mais recente — mesclado com Firebase antes de upload','local+fb='+DB.pedidos.length);
         // Não faz upload imediato — deixa o próximo saveDB normal subir os dados
         // Isso evita batch gigante no login que causa erro
